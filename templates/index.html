@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>云端签到助手</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #f0f2f5;
+            --text-color: #333;
+            --card-bg: white;
+            --card-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            --primary-color: #1a73e8;
+            --primary-hover: #1557b0;
+            --border-color: #ddd;
+            --success-bg: #d4edda;
+            --success-color: #155724;
+            --warning-bg: #fff3cd;
+            --warning-color: #856404;
+        }
+
+        body.dark-theme {
+            --bg-color: #121212;
+            --text-color: #e0e0e0;
+            --card-bg: #1e1e1e;
+            --card-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            --primary-color: #1976d2;
+            --primary-hover: #1565c0;
+            --border-color: #444;
+            --success-bg: #1b5e20;
+            --success-color: #c8e6c9;
+            --warning-bg: #f57c00;
+            --warning-color: #ffe0b2;
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background: var(--bg-color);
+            color: var(--text-color);
+            transition: background 0.3s, color 0.3s;
+        }
+        .card {
+            background: var(--card-bg);
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        h1, h2 {
+            text-align: center;
+            color: var(--primary-color);
+            margin-top: 0;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            box-sizing: border-box;
+            background: var(--card-bg);
+            color: var(--text-color);
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+            margin-top: 10px;
+        }
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+            margin-top: 10px;
+        }
+
+        .status-box {
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: bold;
+            margin: 20px 0;
+        }
+        .waiting {
+            background: var(--warning-bg);
+            color: var(--warning-color);
+            border: 1px solid var(--warning-bg);
+        }
+        .success {
+            background: var(--success-bg);
+            color: var(--success-color);
+            border: 1px solid var(--success-bg);
+        }
+
+        .settings {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(0,0,0,0.1);
+            border-left-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            100% { transform: rotate(360deg); }
+        }
+
+        #qr-display-area {
+            text-align: center;
+            margin-top: 20px;
+            padding: 20px;
+            border: 2px dashed var(--primary-color);
+            border-radius: 10px;
+            background-color: var(--bg-color);
+        }
+        #qrcode {
+            display: inline-block;
+            margin: 15px auto;
+        }
+        .qr-link {
+            word-break: break-all;
+            color: var(--primary-color);
+            font-size: 0.9em;
+            display: block;
+            margin-top: 10px;
+        }
+
+        /* 主题切换按钮 */
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            z-index: 1000;
+            transition: all 0.3s;
+        }
+        .theme-toggle:hover {
+            transform: scale(1.1);
+        }
+        .theme-toggle svg {
+            width: 20px;
+            height: 20px;
+            fill: var(--text-color);
+        }
+
+        /* 使用说明卡片 */
+        .usage-card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            margin-bottom: 20px;
+            text-align: center;
+            border-left: 4px solid var(--primary-color);
+        }
+        .usage-card h3 {
+            margin-top: 0;
+            color: var(--primary-color);
+        }
+        .usage-card p {
+            margin-bottom: 15px;
+            color: var(--text-color);
+        }
+        .usage-link {
+            display: inline-block;
+            padding: 8px 16px;
+            background: var(--primary-color);
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            transition: background 0.3s;
+        }
+        .usage-link:hover {
+            background: var(--primary-hover);
+        }
+
+        /* 新增：输入提示样式 */
+        .input-hint {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 5px;
+            margin-bottom: 15px;
+        }
+        .input-hint code {
+            background: rgba(0,0,0,0.05);
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 主题切换按钮 -->
+    <div class="theme-toggle" onclick="toggleTheme()">
+        <svg id="theme-icon" viewBox="0 0 24 24">
+            <!-- 默认显示太阳图标（浅色主题） -->
+            <path id="sun-icon" d="M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5S14.76,7,12,7zM12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35,3-3S10.35,9,12,9zM12,2L9,5l3,3l3-3L12,2zM12,22l-3-3l3-3l3,3L12,22zM2,12l3-3l3,3l-3,3L2,12zM22,12l-3,3l-3-3l3-3L22,12z"/>
+            <!-- 月亮图标默认隐藏 -->
+            <path id="moon-icon" d="M9 2c-1.05 0-2.05.16-3 .46 4.06 1.27 7 5.06 7 9.54 0 4.48-2.94 8.27-7 9.54.95.3 1.95.46 3 .46 5.52 0 10-4.48 10-10S14.52 2 9 2z" style="display: none;"/>
+        </svg>
+    </div>
+
+    <!-- 使用说明卡片 -->
+    <div class="usage-card">
+        <h3>如何使用？</h3>
+        <p>支持输入OpenID或包含OpenID的URL，系统会自动提取OpenID</p>
+        <a href="usage" class="usage-link" target="_blank">查看使用说明</a>
+    </div>
+
+    <div id="login-view" class="card hidden">
+        <h1>用户登录</h1>
+        <p style="text-align:center; color:#666; font-size:0.9em;">请输入您的 OpenID 或包含OpenID的URL</p>
+        <input type="text" id="openid-input" placeholder="输入openid或含openid的url" />
+        <div class="input-hint">
+            支持格式：纯OpenID字符串 或 包含openid参数的URL
+        </div>
+        <button onclick="performLogin()" class="btn-primary" id="login-btn">开始监听</button>
+        <div id="login-msg" style="color: red; text-align: center; margin-top: 10px;"></div>
+    </div>
+
+    <div id="dashboard-view" class="card hidden">
+        <h2>正在监听中</h2>
+        <p style="text-align: center;">当前用户: <span id="current-user" style="font-family: monospace;"></span></p>
+
+        <div id="status-box" class="status-box waiting">
+            <span class="spinner"></span>
+            <span id="status-text">初始化中...</span>
+        </div>
+
+        <div id="qr-display-area" class="hidden">
+            <div><strong>扫描下方二维码签到</strong></div>
+            <div id="qrcode"></div>
+            <a id="qr-link-text" class="qr-link" href="#" target="_blank">点击直接跳转</a>
+        </div>
+
+        <div class="settings">
+            <label for="auto-redirect-check" style="cursor: pointer;">
+                <input type="checkbox" id="auto-redirect-check" onchange="saveSettings()">
+                检测成功后自动跳转（微信网页中可用）
+            </label>
+        </div>
+
+        <button onclick="performLogout()" class="btn-danger">退出登录</button>
+    </div>
+
+    <script>
+        // 主题管理
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            if (savedTheme === 'dark') {
+                document.body.classList.add('dark-theme');
+                document.getElementById('sun-icon').style.display = 'none';
+                document.getElementById('moon-icon').style.display = 'block';
+            }
+        }
+
+        function toggleTheme() {
+            const body = document.body;
+            const sunIcon = document.getElementById('sun-icon');
+            const moonIcon = document.getElementById('moon-icon');
+            
+            if (body.classList.contains('dark-theme')) {
+                // 切换到浅色主题
+                body.classList.remove('dark-theme');
+                sunIcon.style.display = 'block';
+                moonIcon.style.display = 'none';
+                localStorage.setItem('theme', 'light');
+            } else {
+                // 切换到深色主题
+                body.classList.add('dark-theme');
+                sunIcon.style.display = 'none';
+                moonIcon.style.display = 'block';
+                localStorage.setItem('theme', 'dark');
+            }
+        }
+
+        function setCookie(name, value, days) {
+            let expires = "";
+            if (days) {
+                let date = new Date();
+                date.setTime(date.getTime() + (days*24*60*60*1000));
+                expires = "; expires=" + date.toUTCString();
+            }
+            document.cookie = name + "=" + (value || "")  + expires + "; path=/";
+        }
+        function getCookie(name) {
+            let nameEQ = name + "=";
+            let ca = document.cookie.split(';');
+            for(let i=0;i < ca.length;i++) {
+                let c = ca[i];
+                while (c.charAt(0)==' ') c = c.substring(1,c.length);
+                if (c.indexOf(nameEQ) == 0) return c.substring(nameEQ.length,c.length);
+            }
+            return null;
+        }
+
+        // 新增：从URL中提取openid的函数
+        function extractOpenIdFromUrl(input) {
+            // 如果输入看起来像URL，尝试提取openid参数
+            if (input.includes('://') || input.includes('openid=') || input.includes('?') || input.includes('&')) {
+                try {
+                    // 尝试解析URL
+                    let url;
+                    if (input.startsWith('http')) {
+                        url = new URL(input);
+                    } else {
+                        // 如果不是完整的URL，尝试添加协议前缀
+                        url = new URL('https://' + input);
+                    }
+                    
+                    // 从URL参数中获取openid
+                    const openid = url.searchParams.get('openid');
+                    if (openid && openid.trim().length > 0) {
+                        return openid.trim();
+                    }
+                    
+                    // 如果URL中已经有openid参数但没有值，尝试从路径或哈希中提取
+                    const regex = /openid=([a-fA-F0-9]+)/g;
+                    const matches = input.match(regex);
+                    if (matches && matches.length > 0) {
+                        const lastMatch = matches[matches.length - 1];
+                        return lastMatch.split('=')[1];
+                    }
+                } catch (e) {
+                    console.log("URL解析失败，尝试直接匹配:", e);
+                    // 尝试直接正则匹配openid参数
+                    const regex = /openid=([a-fA-F0-9]+)/g;
+                    const matches = input.match(regex);
+                    if (matches && matches.length > 0) {
+                        const lastMatch = matches[matches.length - 1];
+                        return lastMatch.split('=')[1];
+                    }
+                }
+            }
+            
+            // 如果不是URL或者提取失败，返回原始值（可能是纯openid）
+            return input.trim();
+        }
+
+        let pollingInterval = null;
+        let isFirstPoll = true;
+        let currentQrUrl = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initTheme();
+            initApp();
+        });
+
+        async function initApp() {
+            const autoRedirect = getCookie('auto_redirect');
+            document.getElementById('auto-redirect-check').checked = (autoRedirect !== 'false');
+
+            try {
+                // 每次进入主页都会调用此接口，后端会强制验证 OpenID
+                const res = await fetch('/api/check_session');
+                const data = await res.json();
+
+                if (data.valid) {
+                    showDashboard(data.openid);
+                } else {
+                    if (data.message && data.message !== "未登录") {
+                        alert("身份验证已过期: " + data.message);
+                    }
+                    showLogin();
+                }
+            } catch (e) {
+                console.error(e);
+                showLogin();
+            }
+        }
+
+        function showLogin() {
+            document.getElementById('login-view').classList.remove('hidden');
+            document.getElementById('dashboard-view').classList.add('hidden');
+            stopPolling();
+        }
+
+        function showDashboard(openid) {
+            document.getElementById('login-view').classList.add('hidden');
+            document.getElementById('dashboard-view').classList.remove('hidden');
+            document.getElementById('current-user').textContent = openid.substring(0, 6) + '***' + openid.substring(openid.length-4);
+            isFirstPoll = true;
+            startPolling();
+        }
+
+        async function performLogin() {
+            const btn = document.getElementById('login-btn');
+            const msg = document.getElementById('login-msg');
+            const input = document.getElementById('openid-input');
+            const rawInput = input.value.trim();
+
+            if (!rawInput) {
+                msg.textContent = "请输入OpenID或包含OpenID的URL";
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = "验证中...";
+            msg.textContent = "";
+
+            try {
+                // 提取openid（支持URL或纯openid）
+                const extractedOpenId = extractOpenIdFromUrl(rawInput);
+                
+                // 验证提取的openid格式（假设是32位十六进制字符串）
+                const openidRegex = /^[a-fA-F0-9]{32}$/;
+                if (!openidRegex.test(extractedOpenId)) {
+                    msg.textContent = "OpenID格式不正确（应为32位十六进制字符串）";
+                    return;
+                }
+
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ openid: extractedOpenId })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    showDashboard(extractedOpenId);
+                } else {
+                    msg.textContent = data.message;
+                    setCookie("user_openid", "", -1);
+                }
+            } catch (e) {
+                msg.textContent = "请求失败，请检查网络";
+                console.error(e);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "开始监听";
+            }
+        }
+
+        async function performLogout() {
+            if(!confirm("确定要停止监听并退出吗？")) return;
+            try { await fetch('/api/logout', { method: 'POST' }); } catch(e) {}
+            setCookie("user_openid", "", -1);
+            location.reload();
+        }
+
+        function saveSettings() {
+            const isChecked = document.getElementById('auto-redirect-check').checked;
+            setCookie('auto_redirect', isChecked, 30);
+
+            const qrArea = document.getElementById('qr-display-area');
+            if (isChecked && !qrArea.classList.contains('hidden') && currentQrUrl) {
+                window.location.href = currentQrUrl;
+            }
+        }
+
+        function startPolling() {
+            if (pollingInterval) clearInterval(pollingInterval);
+            pollStatus();
+            pollingInterval = setInterval(pollStatus, 2000);
+        }
+
+        function stopPolling() {
+            if (pollingInterval) clearInterval(pollingInterval);
+        }
+
+        function renderQrCode(url) {
+            if (url === currentQrUrl) return;
+            currentQrUrl = url;
+            const container = document.getElementById('qrcode');
+            container.innerHTML = "";
+
+            new QRCode(container, {
+                text: url,
+                width: 180,
+                height: 180,
+                colorDark : "#000000",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+
+            const linkEl = document.getElementById('qr-link-text');
+            linkEl.href = url;
+            linkEl.textContent = url;
+        }
+
+        async function pollStatus() {
+            const statusBox = document.getElementById('status-box');
+            const statusText = document.getElementById('status-text');
+            const qrArea = document.getElementById('qr-display-area');
+            const autoRedirect = document.getElementById('auto-redirect-check').checked;
+
+            try {
+                const res = await fetch('/qr_code');
+                const data = await res.json();
+
+                if (data.success === 0) {
+                    statusBox.className = "status-box waiting";
+                    statusText.textContent = data.message || "正在等待签到任务...";
+                    qrArea.classList.add('hidden');
+                    currentQrUrl = null;
+                } else if (data.success === 1) {
+                    statusBox.className = "status-box success";
+
+                    if (data.qr_url) renderQrCode(data.qr_url);
+
+                    if (autoRedirect) {
+                        qrArea.classList.add('hidden');
+
+                        if (isFirstPoll) {
+                            // 首次加载发现签到：延时2秒
+                            statusText.textContent = "检测到签到，2秒后自动跳转...";
+                            stopPolling();
+                            setTimeout(() => {
+                                if (document.getElementById('auto-redirect-check').checked) {
+                                    window.location.href = data.qr_url;
+                                } else {
+                                    statusText.textContent = "自动跳转已取消";
+                                    qrArea.classList.remove('hidden');
+                                    startPolling();
+                                }
+                            }, 2000);
+                        } else {
+                            // 监听中发现新签到：立即跳转
+                            statusText.textContent = "验证成功，正在跳转...";
+                            stopPolling();
+                            window.location.href = data.qr_url;
+                        }
+                    } else {
+                        // 不自动跳转
+                        statusText.textContent = "签到已就绪，请扫描下方二维码";
+                        qrArea.classList.remove('hidden');
+                    }
+                }
+            } catch (e) {
+                console.log("Polling error", e);
+            }
+            isFirstPoll = false;
+        }
+    </script>
+</body>
+</html>
