@@ -637,6 +637,20 @@ class Pipeline:
         self.asyncio_tasks.clear()
 
     def get_status(self) -> Dict[str, Any]:
+        if not self.active_signs:
+            result_meta = build_result_meta(None, self.message or "暂无状态")
+            return {
+                "success": 0,
+                "message": result_meta.get("status_message") or self.message,
+                "qr_url": None,
+                "is_running": self.is_running,
+                "profile": self.profile,
+                "active_sign_count": 0,
+                "active_signs": [],
+                "current_sign": None,
+                "result_meta": result_meta,
+            }
+
         current_sign = None
         for item in self.active_signs:
             result_meta = self.sign_results.get(get_sign_key(item))
