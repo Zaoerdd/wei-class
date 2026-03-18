@@ -1,13 +1,17 @@
+import json
+import os
+import logging
+import queue
+from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
+
 from flask import Flask, render_template, jsonify, request, make_response,send_from_directory
 import ad
 from getdata import getData, get_student_profile, submit_sign
 import asyncio
 from getSocket import TeacherMateWebSocketClient
 import threading
-import os
-import logging
 from typing import Optional, List, Dict, Any, Set, Tuple
-import queue
 
 # 配置日志
 logging.basicConfig(
@@ -15,6 +19,36 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s'
 )
 logger = logging.getLogger(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+FAYE_LOG_PATH = os.path.join(LOG_DIR, "faye_history.log")
+
+
+def _build_faye_file_logger() -> logging.Logger:
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    file_logger = logging.getLogger("faye_history")
+    file_logger.setLevel(logging.INFO)
+    file_logger.propagate = False
+
+    if not any(
+        isinstance(handler, RotatingFileHandler)
+        and os.path.abspath(getattr(handler, "baseFilename", "")) == os.path.abspath(FAYE_LOG_PATH)
+        for handler in file_logger.handlers
+    ):
+        handler = RotatingFileHandler(
+            FAYE_LOG_PATH,
+            maxBytes=2 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        file_logger.addHandler(handler)
+
+    return file_logger
+
+
+faye_file_logger = _build_faye_file_logger()
 
 
 def get_sign_type(item: Dict[str, Any]) -> str:
@@ -61,6 +95,76 @@ def safe_float(value: Any, fallback: float = 0.0) -> float:
         return fallback
 
 
+def normalize_signed_student(student: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(student, dict):
+        return None
+
+    student_id = safe_int(student.get("id"))
+    rank = safe_int(student.get("rank"))
+    team_id = safe_int(student.get("teamId"))
+    is_out_of_bound = safe_int(student.get("isOutOfBound"))
+    distance_value = student.get("distance")
+    distance = None if distance_value in (None, "") else safe_float(distance_value, 0.0)
+
+    normalized = {
+        "id": student_id if student_id is not None else student.get("id"),
+        "name": student.get("name") or "未命名学生",
+        "avatar": student.get("avatar"),
+        "student_number": student.get("studentNumber"),
+        "rank": rank,
+        "team_id": team_id,
+        "is_new": bool(student.get("isNew")) if student.get("isNew") is not None else None,
+        "distance": distance,
+        "is_out_of_bound": is_out_of_bound,
+    }
+
+    if not any(normalized.get(key) not in (None, "") for key in ("id", "student_number", "name")):
+        return None
+
+    return normalized
+
+
+def get_signed_student_key(student: Dict[str, Any]) -> Optional[str]:
+    for field_name in ("id", "student_number", "name"):
+        value = student.get(field_name)
+        if value not in (None, ""):
+            return f"{field_name}:{value}"
+    return None
+
+
+def extract_signed_students_from_event(event: Dict[str, Any]) -> List[Dict[str, Any]]:
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return []
+
+    raw_students: List[Dict[str, Any]] = []
+    for key in ("student", "students"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            raw_students.append(value)
+        elif isinstance(value, list):
+            raw_students.extend(item for item in value if isinstance(item, dict))
+
+    normalized_students: List[Dict[str, Any]] = []
+    seen_keys: Set[str] = set()
+    for raw_student in raw_students:
+        normalized_student = normalize_signed_student(raw_student)
+        if not normalized_student:
+            continue
+
+        student_key = get_signed_student_key(normalized_student)
+        if student_key is None:
+            student_key = json.dumps(normalized_student, sort_keys=True, ensure_ascii=False)
+
+        if student_key in seen_keys:
+            continue
+
+        seen_keys.add(student_key)
+        normalized_students.append(normalized_student)
+
+    return normalized_students
+
+
 def build_sign_result_text(result: Dict[str, Any]) -> str:
     msg_client = str(result.get("msgClient") or "").strip()
     if msg_client:
@@ -105,6 +209,7 @@ def build_result_meta(
     faye: Optional[Dict[str, Any]] = None,
     faye_history: Optional[List[Dict[str, Any]]] = None,
     faye_subscriptions: Optional[List[str]] = None,
+    signed_students: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     return {
         "qr_ready": qr_ready,
@@ -122,6 +227,10 @@ def build_result_meta(
         "faye": faye,
         "faye_history": list(faye_history or []),
         "faye_subscriptions": list(faye_subscriptions or []),
+        "signed_students": [
+            dict(student) if isinstance(student, dict) else student
+            for student in (signed_students or [])
+        ],
     }
 
 
@@ -134,6 +243,10 @@ def clone_result_meta(result_meta: Dict[str, Any]) -> Dict[str, Any]:
         for item in cloned.get("faye_history", [])
     ]
     cloned["faye_subscriptions"] = list(cloned.get("faye_subscriptions", []))
+    cloned["signed_students"] = [
+        dict(student) if isinstance(student, dict) else student
+        for student in cloned.get("signed_students", [])
+    ]
     return cloned
 
 
@@ -327,6 +440,29 @@ class Pipeline:
             "raw": event.get("raw"),
         }
 
+    def _log_faye_event(self, item: Dict[str, Any], event: Dict[str, Any]) -> None:
+        try:
+            payload = {
+                "timestamp": datetime.now(timezone.utc).astimezone().isoformat(),
+                "openid": self.openid,
+                "openid_masked": (
+                    f"{self.openid[:6]}***{self.openid[-4:]}"
+                    if isinstance(self.openid, str) and len(self.openid) >= 10
+                    else self.openid
+                ),
+                "task_name": item.get("name"),
+                "course_id": item.get("courseId"),
+                "sign_id": item.get("signId"),
+                "sign_type": item.get("signType"),
+                "event": {
+                    **self._build_faye_snapshot(event),
+                    "raw_message": event.get("raw_message"),
+                },
+            }
+            faye_file_logger.info(json.dumps(payload, ensure_ascii=False))
+        except Exception as e:
+            logger.warning(f"写入 Faye 日志失败: {e}")
+
     def _append_faye_event(self, result_meta: Dict[str, Any], event: Dict[str, Any]) -> None:
         history = list(result_meta.get("faye_history") or [])
         snapshot = self._build_faye_snapshot(event)
@@ -340,6 +476,46 @@ class Pipeline:
             if subscription not in subscriptions:
                 subscriptions.append(subscription)
             result_meta["faye_subscriptions"] = subscriptions
+
+    def _merge_signed_students(self, result_meta: Dict[str, Any], event: Dict[str, Any]) -> None:
+        incoming_students = extract_signed_students_from_event(event)
+        if not incoming_students:
+            return
+
+        signed_students = [
+            dict(student)
+            for student in result_meta.get("signed_students", [])
+            if isinstance(student, dict)
+        ]
+        student_index_map: Dict[str, int] = {}
+
+        for index, student in enumerate(signed_students):
+            student_key = get_signed_student_key(student)
+            if student_key:
+                student_index_map[student_key] = index
+
+        for student in incoming_students:
+            student_key = get_signed_student_key(student)
+            if student_key and student_key in student_index_map:
+                signed_students[student_index_map[student_key]] = {
+                    **signed_students[student_index_map[student_key]],
+                    **student,
+                }
+                continue
+
+            signed_students.append(student)
+            if student_key:
+                student_index_map[student_key] = len(signed_students) - 1
+
+        signed_students.sort(
+            key=lambda current_student: (
+                current_student.get("rank") is None,
+                current_student.get("rank") if current_student.get("rank") is not None else 10 ** 9,
+                str(current_student.get("name") or ""),
+                str(current_student.get("student_number") or ""),
+            )
+        )
+        result_meta["signed_students"] = signed_students
 
     async def run_websocket_client(self, item: Dict[str, Any]):
         sign_id = item["signId"]
@@ -401,6 +577,8 @@ class Pipeline:
             event.get("summary") or self.message or "暂无状态",
         )
         self._append_faye_event(result_meta, event)
+        self._merge_signed_students(result_meta, event)
+        self._log_faye_event(item, event)
         if not result_meta.get("result_ready"):
             result_meta["status_message"] = event.get("summary") or result_meta.get("status_message")
 
@@ -465,6 +643,12 @@ class Pipeline:
             if result_meta and result_meta.get("result_ready"):
                 current_sign = item
                 break
+        if current_sign is None:
+            for item in self.active_signs:
+                result_meta = self.sign_results.get(get_sign_key(item))
+                if result_meta:
+                    current_sign = item
+                    break
         if current_sign is None and self.active_signs:
             current_sign = self.active_signs[0]
         result_meta = self._get_result_meta(current_sign)

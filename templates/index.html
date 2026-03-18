@@ -311,9 +311,127 @@
             font-size: 0.84rem;
             line-height: 1.45;
         }
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+        .section-header h3 {
+            margin: 0;
+        }
+        .count-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 56px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(21, 87, 36, 0.12);
+            color: var(--success-color);
+            font-size: 0.84rem;
+            font-weight: 700;
+        }
+        .student-empty {
+            padding: 14px;
+            border-radius: 10px;
+            border: 1px dashed var(--border-color);
+            color: #666;
+            text-align: center;
+            background: rgba(26, 115, 232, 0.04);
+        }
+        .student-list {
+            display: grid;
+            gap: 12px;
+        }
+        .student-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 12px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+        }
+        .student-avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            object-fit: cover;
+            flex-shrink: 0;
+            background: rgba(0, 0, 0, 0.06);
+        }
+        .student-main {
+            min-width: 0;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .student-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .student-name {
+            min-width: 0;
+            font-size: 0.98rem;
+            font-weight: 700;
+            word-break: break-word;
+        }
+        .student-rank {
+            flex-shrink: 0;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: rgba(26, 115, 232, 0.12);
+            color: var(--primary-color);
+            font-size: 0.82rem;
+            font-weight: 700;
+        }
+        .student-number {
+            color: #666;
+            font-size: 0.88rem;
+            word-break: break-word;
+        }
+        .student-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .student-tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: rgba(26, 115, 232, 0.08);
+            color: var(--text-color);
+            font-size: 0.78rem;
+            line-height: 1;
+        }
+        .student-tag.success {
+            background: rgba(21, 87, 36, 0.12);
+            color: var(--success-color);
+        }
+        .student-tag.warning {
+            background: rgba(245, 124, 0, 0.14);
+            color: #b85d00;
+        }
         @media (max-width: 520px) {
             .meta-grid {
                 grid-template-columns: 1fr;
+            }
+            .student-row {
+                align-items: flex-start;
+            }
+            .student-title {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .section-header {
+                align-items: flex-start;
+                flex-direction: column;
             }
         }
     </style>
@@ -423,6 +541,15 @@
                     <span id="sign-rank" class="meta-value">-</span>
                 </div>
             </div>
+        </div>
+
+        <div id="signed-students-card" class="info-card hidden">
+            <div class="section-header">
+                <h3>已签到学生</h3>
+                <span id="signed-students-count" class="count-badge">0 人</span>
+            </div>
+            <div id="signed-students-empty" class="student-empty hidden">暂未收到已签到学生信息</div>
+            <div id="signed-students-list" class="student-list"></div>
         </div>
 
         <details id="faye-debug-card" class="info-card hidden">
@@ -580,9 +707,238 @@
         let pollingInterval = null;
         let isFirstPoll = true;
         let currentQrUrl = null;
+        let audioContext = null;
+        let signAlertLoopTimer = null;
+        let signAlertLoopRunning = false;
+        let activeAlertSignKey = null;
+        let pendingAlertSignKey = null;
+        const signAlertIntervalMs = 1000;
 
         function isWeChatEnvironment() {
             return /micromessenger/i.test(navigator.userAgent);
+        }
+
+        function getAudioContext() {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextClass) {
+                return null;
+            }
+
+            if (!audioContext) {
+                audioContext = new AudioContextClass();
+            }
+
+            return audioContext;
+        }
+
+        function getSignTaskKey(data) {
+            const payload = data && typeof data === 'object' ? data : {};
+            const currentSign = payload.current_sign || null;
+            const resultMeta = payload.result_meta || {};
+            const activeSignCount = Number(payload.active_sign_count ?? 0);
+            const courseId = currentSign ? currentSign.courseId : resultMeta.course_id;
+            const signId = currentSign ? currentSign.signId : resultMeta.sign_id;
+
+            if (activeSignCount <= 0 || courseId === undefined || courseId === null || signId === undefined || signId === null) {
+                return null;
+            }
+
+            return `${courseId}:${signId}`;
+        }
+
+        function scheduleAlertTone(audioCtx, destination, startTime, frequency, duration, gainValue = 0.05) {
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(frequency, startTime);
+
+            gainNode.gain.setValueAtTime(0.0001, startTime);
+            gainNode.gain.exponentialRampToValueAtTime(gainValue, startTime + 0.02);
+            gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(destination);
+            oscillator.start(startTime);
+            oscillator.stop(startTime + duration + 0.03);
+        }
+
+        async function playSignStartAlertTone() {
+            const audioCtx = getAudioContext();
+            if (!audioCtx) {
+                return false;
+            }
+
+            try {
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+            } catch (error) {
+                console.debug('Audio resume blocked', error);
+            }
+
+            if (audioCtx.state !== 'running') {
+                return false;
+            }
+
+            const masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.8;
+            masterGain.connect(audioCtx.destination);
+
+            const startTime = audioCtx.currentTime + 0.03;
+            scheduleAlertTone(audioCtx, masterGain, startTime, 784, 0.14, 0.05);
+            scheduleAlertTone(audioCtx, masterGain, startTime + 0.18, 988, 0.16, 0.06);
+            scheduleAlertTone(audioCtx, masterGain, startTime + 0.38, 1175, 0.2, 0.065);
+
+            return true;
+        }
+
+        async function speakSignActivePrompt() {
+            if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+                return false;
+            }
+
+            return await new Promise((resolve) => {
+                let settled = false;
+                const finish = (result) => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    clearTimeout(timeoutId);
+                    resolve(result);
+                };
+
+                const utterance = new SpeechSynthesisUtterance('正在签到');
+                utterance.lang = 'zh-CN';
+                utterance.rate = 1;
+                utterance.pitch = 1;
+                utterance.volume = 1;
+                utterance.onend = () => finish(true);
+                utterance.onerror = () => finish(false);
+
+                const timeoutId = window.setTimeout(() => finish(false), 2500);
+
+                try {
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(utterance);
+                } catch (error) {
+                    console.debug('Speech synthesis blocked', error);
+                    finish(false);
+                }
+            });
+        }
+
+        function clearSignAlertLoopTimer() {
+            if (signAlertLoopTimer) {
+                window.clearTimeout(signAlertLoopTimer);
+                signAlertLoopTimer = null;
+            }
+        }
+
+        function scheduleNextSignAlert(signTaskKey, delayMs = signAlertIntervalMs) {
+            if (!signTaskKey || activeAlertSignKey !== signTaskKey) {
+                return;
+            }
+
+            clearSignAlertLoopTimer();
+            signAlertLoopTimer = window.setTimeout(() => {
+                void runContinuousSignAlert(signTaskKey);
+            }, delayMs);
+        }
+
+        function stopContinuousSignAlert() {
+            clearSignAlertLoopTimer();
+            signAlertLoopRunning = false;
+            activeAlertSignKey = null;
+            pendingAlertSignKey = null;
+
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+            }
+        }
+
+        async function playSignActiveAlertOnce() {
+            const spoke = await speakSignActivePrompt();
+            if (spoke) {
+                return true;
+            }
+
+            return await playSignStartAlertTone();
+        }
+
+        async function runContinuousSignAlert(signTaskKey) {
+            if (!signTaskKey || activeAlertSignKey !== signTaskKey || signAlertLoopRunning) {
+                return;
+            }
+
+            signAlertLoopRunning = true;
+            clearSignAlertLoopTimer();
+
+            try {
+                const played = await playSignActiveAlertOnce();
+                if (activeAlertSignKey !== signTaskKey) {
+                    return;
+                }
+
+                pendingAlertSignKey = played ? null : signTaskKey;
+                scheduleNextSignAlert(signTaskKey, signAlertIntervalMs);
+            } finally {
+                signAlertLoopRunning = false;
+            }
+        }
+
+        async function unlockAudioPlayback() {
+            const audioCtx = getAudioContext();
+            if (!audioCtx) {
+                return true;
+            }
+
+            try {
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+            } catch (error) {
+                console.debug('Audio unlock blocked', error);
+            }
+
+            if (audioCtx.state !== 'running') {
+                return false;
+            }
+
+            if (pendingAlertSignKey && pendingAlertSignKey === activeAlertSignKey) {
+                const pendingKey = pendingAlertSignKey;
+                pendingAlertSignKey = null;
+                void runContinuousSignAlert(pendingKey);
+            }
+
+            return true;
+        }
+
+        function registerAudioUnlock() {
+            const unlock = () => {
+                void unlockAudioPlayback();
+            };
+
+            window.addEventListener('pointerdown', unlock, { passive: true });
+            window.addEventListener('keydown', unlock);
+        }
+
+        function syncContinuousSignAlert(data) {
+            const signTaskKey = getSignTaskKey(data);
+            if (!signTaskKey) {
+                stopContinuousSignAlert();
+                return;
+            }
+
+            if (activeAlertSignKey === signTaskKey) {
+                return;
+            }
+
+            stopContinuousSignAlert();
+            activeAlertSignKey = signTaskKey;
+            pendingAlertSignKey = signTaskKey;
+            void runContinuousSignAlert(signTaskKey);
         }
 
         function setFieldText(id, value, fallback = "-") {
@@ -608,12 +964,34 @@
             if (!Number.isFinite(rank) || rank <= 0) {
                 return "-";
             }
-            return `第${rank}个`;
+            return '第' + rank + '个';
+        }
+
+        function formatDistance(value) {
+            const distance = Number(value);
+            if (!Number.isFinite(distance) || distance <= 0) {
+                return null;
+            }
+            if (distance >= 1000) {
+                const km = distance / 1000;
+                return `${km >= 10 ? km.toFixed(0) : km.toFixed(1)} km`;
+            }
+            return `${Math.round(distance)} m`;
+        }
+
+        function createStudentTag(text, extraClass = "") {
+            const tag = document.createElement('span');
+            tag.className = extraClass ? `student-tag ${extraClass}` : 'student-tag';
+            tag.textContent = text;
+            return tag;
         }
 
         function resetDashboardData() {
+            stopContinuousSignAlert();
+            pendingAlertSignKey = null;
             document.getElementById('profile-card').classList.add('hidden');
             document.getElementById('sign-meta-card').classList.add('hidden');
+            document.getElementById('signed-students-card').classList.add('hidden');
             document.getElementById('faye-debug-card').classList.add('hidden');
             setFieldText('profile-name', '-');
             setFieldText('profile-student-number', '-');
@@ -637,6 +1015,9 @@
             setFieldText('faye-inner-token', '-');
             setFieldText('faye-history-count', '0', '0');
             setFieldText('faye-subscriptions', '-');
+            setFieldText('signed-students-count', '0 人', '0 人');
+            document.getElementById('signed-students-empty').classList.add('hidden');
+            document.getElementById('signed-students-list').replaceChildren();
             setJsonText('faye-raw-json', '-');
         }
 
@@ -679,6 +1060,106 @@
             setFieldText('sign-rank', formatSignRank(resultMeta.sign_rank), '-');
         }
 
+        function renderSignedStudents(data) {
+            const signedStudentsCard = document.getElementById('signed-students-card');
+            const signedStudentsEmpty = document.getElementById('signed-students-empty');
+            const signedStudentsList = document.getElementById('signed-students-list');
+            const resultMeta = data.result_meta || {};
+            const students = Array.isArray(resultMeta.signed_students) ? resultMeta.signed_students : [];
+            const shouldShow = Boolean(data.current_sign || students.length);
+
+            signedStudentsList.replaceChildren();
+            setFieldText('signed-students-count', `${students.length} 人`, '0 人');
+
+            if (!shouldShow) {
+                signedStudentsCard.classList.add('hidden');
+                signedStudentsEmpty.classList.add('hidden');
+                return;
+            }
+
+            signedStudentsCard.classList.remove('hidden');
+
+            if (!students.length) {
+                signedStudentsEmpty.classList.remove('hidden');
+                return;
+            }
+
+            signedStudentsEmpty.classList.add('hidden');
+
+            students.forEach((student, index) => {
+                const studentRow = document.createElement('article');
+                studentRow.className = 'student-row';
+
+                const studentAvatar = document.createElement('img');
+                studentAvatar.className = 'student-avatar';
+                studentAvatar.alt = `${student.name || '学生'}头像`;
+                studentAvatar.loading = 'lazy';
+                studentAvatar.referrerPolicy = 'no-referrer';
+                studentAvatar.src = student.avatar || 'https://app.teachermate.com.cn/images/student-default-avatar.png';
+                studentAvatar.onerror = () => {
+                    studentAvatar.onerror = null;
+                    studentAvatar.src = 'https://app.teachermate.com.cn/images/student-default-avatar.png';
+                };
+
+                const studentMain = document.createElement('div');
+                studentMain.className = 'student-main';
+
+                const studentTitle = document.createElement('div');
+                studentTitle.className = 'student-title';
+
+                const studentName = document.createElement('span');
+                studentName.className = 'student-name';
+                studentName.textContent = student.name || '未命名学生';
+
+                const studentRank = document.createElement('span');
+                studentRank.className = 'student-rank';
+                const rank = Number(student.rank);
+                studentRank.textContent = Number.isFinite(rank) && rank > 0
+                    ? `第 ${rank} 个`
+                    : `#${index + 1}`;
+
+                const studentNumber = document.createElement('div');
+                studentNumber.className = 'student-number';
+                studentNumber.textContent = student.student_number || '学号未提供';
+
+                const studentMeta = document.createElement('div');
+                studentMeta.className = 'student-meta';
+
+                if (student.is_new === true) {
+                    studentMeta.appendChild(createStudentTag('新加入'));
+                }
+
+                const outOfBound = Number(student.is_out_of_bound);
+                if (Number.isFinite(outOfBound) && outOfBound > 0) {
+                    studentMeta.appendChild(createStudentTag('超出范围', 'warning'));
+                }
+
+                const distanceText = formatDistance(student.distance);
+                if (distanceText) {
+                    studentMeta.appendChild(createStudentTag(`距离 ${distanceText}`));
+                }
+
+                const teamId = Number(student.team_id);
+                if (Number.isFinite(teamId) && teamId > 0) {
+                    studentMeta.appendChild(createStudentTag(`队伍 ${teamId}`));
+                }
+
+                if (!studentMeta.childNodes.length) {
+                    studentMeta.appendChild(createStudentTag('已签到', 'success'));
+                }
+
+                studentTitle.appendChild(studentName);
+                studentTitle.appendChild(studentRank);
+                studentMain.appendChild(studentTitle);
+                studentMain.appendChild(studentNumber);
+                studentMain.appendChild(studentMeta);
+
+                studentRow.appendChild(studentAvatar);
+                studentRow.appendChild(studentMain);
+                signedStudentsList.appendChild(studentRow);
+            });
+        }
+
         function renderFayeDebug(data) {
             const debugCard = document.getElementById('faye-debug-card');
             const resultMeta = data.result_meta || {};
@@ -712,11 +1193,13 @@
             if (!data || typeof data !== 'object') return;
             renderProfile(data.profile);
             renderSignMeta(data);
+            renderSignedStudents(data);
             renderFayeDebug(data);
         }
 
         document.addEventListener('DOMContentLoaded', () => {
             initTheme();
+            registerAudioUnlock();
             resetDashboardData();
             initApp();
         });
@@ -777,6 +1260,7 @@
             msg.textContent = "";
 
             try {
+                void unlockAudioPlayback();
                 // 提取openid（支持URL或纯openid）
                 const extractedOpenId = extractOpenIdFromUrl(rawInput);
                 
@@ -867,6 +1351,7 @@
             try {
                 const res = await fetch('/qr_code');
                 const data = await res.json();
+                syncContinuousSignAlert(data);
                 renderDashboardData(data);
                 const resultMeta = data.result_meta || {};
 

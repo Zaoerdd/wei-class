@@ -65,6 +65,16 @@ class TeacherMateWebSocketClient:
         subscription = payload.get("subscription")
         data_type = data.get("type")
         qr_url = data.get("qrUrl")
+        raw_students: List[Dict[str, Any]] = []
+
+        for key in ("student", "students"):
+            value = data.get(key)
+            if isinstance(value, dict):
+                raw_students.append(value)
+            elif isinstance(value, list):
+                raw_students.extend(item for item in value if isinstance(item, dict))
+
+        has_student_update = len(raw_students) > 0
 
         if channel == "/meta/subscribe":
             event_kind = "meta_subscribe"
@@ -81,6 +91,12 @@ class TeacherMateWebSocketClient:
         elif data_type == 2:
             event_kind = "attendance_closed"
             summary = "签到通道提示已关闭"
+        elif data_type == 3 and has_student_update:
+            event_kind = "student_signed"
+            if len(raw_students) == 1 and raw_students[0].get("name"):
+                summary = f"{raw_students[0].get('name')} 已签到"
+            else:
+                summary = f"已收到 {len(raw_students)} 条签到记录"
         elif data_type == 3:
             event_kind = "attendance_pending"
             summary = "二维码暂未生成"
@@ -166,7 +182,9 @@ class TeacherMateWebSocketClient:
                 self.qr_callback(str(qr_url))
             return
 
-        if data_type == 3:
+        if event.get("event_kind") == "student_signed":
+            logger.info("收到学生签到更新")
+        elif data_type == 3:
             logger.info("二维码暂未生成，等待后续推送")
         elif data_type == 2:
             logger.info("检测到签到关闭消息")
