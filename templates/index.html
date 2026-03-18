@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>云端签到助手</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="{{ url_for('static', filename='qrcode.min.js') }}"></script>
     <style>
         :root {
             --bg-color: #f0f2f5;
@@ -114,6 +114,11 @@
             color: var(--success-color);
             border: 1px solid var(--success-bg);
         }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
 
         .settings {
             margin-top: 20px;
@@ -145,21 +150,37 @@
         #qr-display-area {
             text-align: center;
             margin-top: 20px;
-            padding: 20px;
-            border: 2px dashed var(--primary-color);
-            border-radius: 10px;
-            background-color: var(--bg-color);
+            padding: 16px 0 0;
+        }
+        .qr-panel {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            background: #ffffff;
+            padding: 18px;
+            border-radius: 28px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
         }
         #qrcode {
             display: inline-block;
-            margin: 15px auto;
+            margin: 0 auto;
+            line-height: 0;
         }
         .qr-link {
-            word-break: break-all;
             color: var(--primary-color);
-            font-size: 0.9em;
-            display: block;
-            margin-top: 10px;
+            font-size: 0.95em;
+            display: inline-block;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .qr-link:hover {
+            text-decoration: underline;
+        }
+        .qr-tip {
+            margin-top: 12px;
+            color: #666;
+            font-size: 0.88em;
         }
 
         /* 主题切换按钮 */
@@ -233,6 +254,68 @@
             border-radius: 3px;
             font-family: monospace;
         }
+        .info-card {
+            margin-top: 18px;
+            padding: 18px;
+            border-radius: 12px;
+            background: rgba(26, 115, 232, 0.06);
+            border: 1px solid rgba(26, 115, 232, 0.12);
+        }
+        .info-card h3 {
+            margin: 0 0 14px;
+            color: var(--primary-color);
+            font-size: 1rem;
+            text-align: left;
+        }
+        details.info-card summary {
+            cursor: pointer;
+            font-weight: 700;
+            color: var(--primary-color);
+            outline: none;
+        }
+        details.info-card[open] summary {
+            margin-bottom: 14px;
+        }
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+        }
+        .meta-label {
+            font-size: 0.82rem;
+            color: #666;
+        }
+        .meta-value {
+            font-size: 0.96rem;
+            font-weight: 600;
+            word-break: break-word;
+        }
+        .debug-json {
+            margin: 14px 0 0;
+            padding: 12px;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.06);
+            border: 1px solid var(--border-color);
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 0.84rem;
+            line-height: 1.45;
+        }
+        @media (max-width: 520px) {
+            .meta-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
@@ -274,10 +357,120 @@
             <span id="status-text">初始化中...</span>
         </div>
 
+        <div id="profile-card" class="info-card hidden">
+            <h3>个人身份信息</h3>
+            <div class="meta-grid">
+                <div class="meta-item">
+                    <span class="meta-label">姓名</span>
+                    <span id="profile-name" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">学号</span>
+                    <span id="profile-student-number" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">班级</span>
+                    <span id="profile-class-name" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">学院</span>
+                    <span id="profile-department-name" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">学校</span>
+                    <span id="profile-college-name" class="meta-value">-</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="sign-meta-card" class="info-card hidden">
+            <h3>签到结果元数据</h3>
+            <div class="meta-grid">
+                <div class="meta-item">
+                    <span class="meta-label">当前任务</span>
+                    <span id="sign-name" class="meta-value">暂无活跃签到</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">签到类型</span>
+                    <span id="sign-type" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">课程 ID</span>
+                    <span id="sign-course-id" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">签到 ID</span>
+                    <span id="sign-sign-id" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">活跃签到数</span>
+                    <span id="sign-count" class="meta-value">0</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">二维码状态</span>
+                    <span id="sign-qr-status" class="meta-value">等待获取</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">状态消息</span>
+                    <span id="sign-status-message" class="meta-value">初始化中...</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">签到结果</span>
+                    <span id="sign-result-text" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">签到排名</span>
+                    <span id="sign-rank" class="meta-value">-</span>
+                </div>
+            </div>
+        </div>
+
+        <details id="faye-debug-card" class="info-card hidden">
+            <summary>Faye 调试信息</summary>
+            <div class="meta-grid">
+                <div class="meta-item">
+                    <span class="meta-label">最近通道</span>
+                    <span id="faye-channel" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">订阅目标</span>
+                    <span id="faye-subscription" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">事件类型</span>
+                    <span id="faye-event-kind" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">data.type</span>
+                    <span id="faye-data-type" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">successful</span>
+                    <span id="faye-successful" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">innerFayeToken</span>
+                    <span id="faye-inner-token" class="meta-value">-</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">历史条数</span>
+                    <span id="faye-history-count" class="meta-value">0</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">成功订阅</span>
+                    <span id="faye-subscriptions" class="meta-value">-</span>
+                </div>
+            </div>
+            <pre id="faye-raw-json" class="debug-json">-</pre>
+        </details>
+
         <div id="qr-display-area" class="hidden">
             <div><strong>扫描下方二维码签到</strong></div>
-            <div id="qrcode"></div>
-            <a id="qr-link-text" class="qr-link" href="#" target="_blank">点击直接跳转</a>
+            <div class="qr-panel">
+                <div id="qrcode"></div>
+                <a id="qr-link-text" class="qr-link" href="#" target="_blank">打开签到链接</a>
+            </div>
+            <div class="qr-tip">非微信环境建议直接扫码或截图到微信识别</div>
         </div>
 
         <div class="settings">
@@ -388,14 +581,150 @@
         let isFirstPoll = true;
         let currentQrUrl = null;
 
+        function isWeChatEnvironment() {
+            return /micromessenger/i.test(navigator.userAgent);
+        }
+
+        function setFieldText(id, value, fallback = "-") {
+            const element = document.getElementById(id);
+            if (!element) return;
+            element.textContent = (value === undefined || value === null || value === "") ? fallback : value;
+        }
+
+        function setJsonText(id, value) {
+            const element = document.getElementById(id);
+            if (!element) return;
+            if (value === undefined || value === null || value === "") {
+                element.textContent = "-";
+                return;
+            }
+            element.textContent = typeof value === 'string'
+                ? value
+                : JSON.stringify(value, null, 2);
+        }
+
+        function formatSignRank(value) {
+            const rank = Number(value);
+            if (!Number.isFinite(rank) || rank <= 0) {
+                return "-";
+            }
+            return `第${rank}个`;
+        }
+
+        function resetDashboardData() {
+            document.getElementById('profile-card').classList.add('hidden');
+            document.getElementById('sign-meta-card').classList.add('hidden');
+            document.getElementById('faye-debug-card').classList.add('hidden');
+            setFieldText('profile-name', '-');
+            setFieldText('profile-student-number', '-');
+            setFieldText('profile-class-name', '-');
+            setFieldText('profile-department-name', '-');
+            setFieldText('profile-college-name', '-');
+            setFieldText('sign-name', '暂无活跃签到', '暂无活跃签到');
+            setFieldText('sign-type', '-');
+            setFieldText('sign-course-id', '-');
+            setFieldText('sign-sign-id', '-');
+            setFieldText('sign-count', '0', '0');
+            setFieldText('sign-qr-status', '等待获取', '等待获取');
+            setFieldText('sign-status-message', '初始化中...', '初始化中...');
+            setFieldText('sign-result-text', '-');
+            setFieldText('sign-rank', '-');
+            setFieldText('faye-channel', '-');
+            setFieldText('faye-subscription', '-');
+            setFieldText('faye-event-kind', '-');
+            setFieldText('faye-data-type', '-');
+            setFieldText('faye-successful', '-');
+            setFieldText('faye-inner-token', '-');
+            setFieldText('faye-history-count', '0', '0');
+            setFieldText('faye-subscriptions', '-');
+            setJsonText('faye-raw-json', '-');
+        }
+
+        function renderProfile(profile) {
+            const profileCard = document.getElementById('profile-card');
+            if (!profile) {
+                profileCard.classList.add('hidden');
+                return;
+            }
+
+            profileCard.classList.remove('hidden');
+            setFieldText('profile-name', profile.name);
+            setFieldText('profile-student-number', profile.student_number);
+            setFieldText('profile-class-name', profile.class_name);
+            setFieldText('profile-department-name', profile.department_name);
+            setFieldText('profile-college-name', profile.college_name);
+        }
+
+        function renderSignMeta(data) {
+            const signMetaCard = document.getElementById('sign-meta-card');
+            const currentSign = data.current_sign || null;
+            const resultMeta = data.result_meta || {};
+            const signName = currentSign ? currentSign.name : (resultMeta.task_name || '暂无活跃签到');
+            const signType = currentSign ? currentSign.signType : (resultMeta.sign_type || '-');
+            const courseId = currentSign ? currentSign.courseId : (resultMeta.course_id ?? '-');
+            const signId = currentSign ? currentSign.signId : (resultMeta.sign_id ?? '-');
+            const qrStatus = signType === '二维码签到'
+                ? (resultMeta.qr_ready ? '二维码已获取' : '等待获取')
+                : (signType === '-' ? '等待获取' : '无需二维码');
+
+            signMetaCard.classList.remove('hidden');
+            setFieldText('sign-name', signName, '暂无活跃签到');
+            setFieldText('sign-type', signType);
+            setFieldText('sign-course-id', courseId, '-');
+            setFieldText('sign-sign-id', signId, '-');
+            setFieldText('sign-count', data.active_sign_count ?? 0, '0');
+            setFieldText('sign-qr-status', qrStatus, '等待获取');
+            setFieldText('sign-status-message', resultMeta.status_message || data.message || '暂无状态');
+            setFieldText('sign-result-text', resultMeta.frontend_message || '-');
+            setFieldText('sign-rank', formatSignRank(resultMeta.sign_rank), '-');
+        }
+
+        function renderFayeDebug(data) {
+            const debugCard = document.getElementById('faye-debug-card');
+            const resultMeta = data.result_meta || {};
+            const faye = resultMeta.faye || null;
+            const fayeHistory = Array.isArray(resultMeta.faye_history) ? resultMeta.faye_history : [];
+
+            if (!faye) {
+                debugCard.classList.add('hidden');
+                return;
+            }
+
+            debugCard.classList.remove('hidden');
+            setFieldText('faye-channel', faye.channel);
+            setFieldText('faye-subscription', faye.subscription);
+            setFieldText('faye-event-kind', faye.event_kind);
+            setFieldText('faye-data-type', faye.data_type, '-');
+            setFieldText('faye-successful', faye.successful, '-');
+            setFieldText('faye-inner-token', faye.inner_faye_token, '-');
+            setFieldText('faye-history-count', fayeHistory.length ?? 0, '0');
+            setFieldText(
+                'faye-subscriptions',
+                Array.isArray(resultMeta.faye_subscriptions) && resultMeta.faye_subscriptions.length
+                    ? resultMeta.faye_subscriptions.join(' | ')
+                    : '-',
+                '-'
+            );
+            setJsonText('faye-raw-json', faye.raw || faye);
+        }
+
+        function renderDashboardData(data) {
+            if (!data || typeof data !== 'object') return;
+            renderProfile(data.profile);
+            renderSignMeta(data);
+            renderFayeDebug(data);
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             initTheme();
+            resetDashboardData();
             initApp();
         });
 
         async function initApp() {
             const autoRedirect = getCookie('auto_redirect');
-            document.getElementById('auto-redirect-check').checked = (autoRedirect !== 'false');
+            document.getElementById('auto-redirect-check').checked =
+                autoRedirect === null ? isWeChatEnvironment() : (autoRedirect !== 'false');
 
             try {
                 // 每次进入主页都会调用此接口，后端会强制验证 OpenID
@@ -403,7 +732,7 @@
                 const data = await res.json();
 
                 if (data.valid) {
-                    showDashboard(data.openid);
+                    showDashboard(data.openid, data);
                 } else {
                     if (data.message && data.message !== "未登录") {
                         alert("身份验证已过期: " + data.message);
@@ -419,13 +748,15 @@
         function showLogin() {
             document.getElementById('login-view').classList.remove('hidden');
             document.getElementById('dashboard-view').classList.add('hidden');
+            resetDashboardData();
             stopPolling();
         }
 
-        function showDashboard(openid) {
+        function showDashboard(openid, dashboardData = null) {
             document.getElementById('login-view').classList.add('hidden');
             document.getElementById('dashboard-view').classList.remove('hidden');
             document.getElementById('current-user').textContent = openid.substring(0, 6) + '***' + openid.substring(openid.length-4);
+            renderDashboardData(dashboardData || {});
             isFirstPoll = true;
             startPolling();
         }
@@ -464,7 +795,7 @@
                 const data = await res.json();
 
                 if (data.success) {
-                    showDashboard(extractedOpenId);
+                    showDashboard(extractedOpenId, data);
                 } else {
                     msg.textContent = data.message;
                     setCookie("user_openid", "", -1);
@@ -490,7 +821,7 @@
             setCookie('auto_redirect', isChecked, 30);
 
             const qrArea = document.getElementById('qr-display-area');
-            if (isChecked && !qrArea.classList.contains('hidden') && currentQrUrl) {
+            if (isChecked && isWeChatEnvironment() && !qrArea.classList.contains('hidden') && currentQrUrl) {
                 window.location.href = currentQrUrl;
             }
         }
@@ -513,16 +844,17 @@
 
             new QRCode(container, {
                 text: url,
-                width: 180,
-                height: 180,
+                width: 300,
+                height: 300,
                 colorDark : "#000000",
                 colorLight : "#ffffff",
-                correctLevel : QRCode.CorrectLevel.H
+                correctLevel : QRCode.CorrectLevel.M
             });
 
             const linkEl = document.getElementById('qr-link-text');
             linkEl.href = url;
-            linkEl.textContent = url;
+            linkEl.title = url;
+            linkEl.textContent = "打开签到链接";
         }
 
         async function pollStatus() {
@@ -530,22 +862,25 @@
             const statusText = document.getElementById('status-text');
             const qrArea = document.getElementById('qr-display-area');
             const autoRedirect = document.getElementById('auto-redirect-check').checked;
+            const canAutoRedirect = autoRedirect && isWeChatEnvironment();
 
             try {
                 const res = await fetch('/qr_code');
                 const data = await res.json();
+                renderDashboardData(data);
+                const resultMeta = data.result_meta || {};
 
                 if (data.success === 0) {
                     statusBox.className = "status-box waiting";
                     statusText.textContent = data.message || "正在等待签到任务...";
                     qrArea.classList.add('hidden');
                     currentQrUrl = null;
-                } else if (data.success === 1) {
+                } else if (resultMeta.qr_ready && data.qr_url) {
                     statusBox.className = "status-box success";
 
                     if (data.qr_url) renderQrCode(data.qr_url);
 
-                    if (autoRedirect) {
+                    if (canAutoRedirect) {
                         qrArea.classList.add('hidden');
 
                         if (isFirstPoll) {
@@ -568,10 +903,17 @@
                             window.location.href = data.qr_url;
                         }
                     } else {
-                        // 不自动跳转
-                        statusText.textContent = "签到已就绪，请扫描下方二维码";
+                        // 非微信环境或未开启自动跳转时，直接展示二维码
+                        statusText.textContent = autoRedirect && !isWeChatEnvironment()
+                            ? "检测到签到，请扫描下方二维码；自动跳转仅支持微信内置浏览器"
+                            : "签到已就绪，请扫描下方二维码";
                         qrArea.classList.remove('hidden');
                     }
+                } else {
+                    statusBox.className = resultMeta.is_error ? "status-box error" : "status-box success";
+                    statusText.textContent = resultMeta.frontend_message || resultMeta.status_message || data.message || "签到结果已更新";
+                    qrArea.classList.add('hidden');
+                    currentQrUrl = null;
                 }
             } catch (e) {
                 console.log("Polling error", e);
