@@ -712,6 +712,112 @@ a {
     line-height: 1.8;
 }
 
+.health-check-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.health-card {
+    padding: 20px;
+    border-radius: 24px;
+    background: var(--surface-strong);
+    border: 1px solid rgba(20, 33, 61, 0.08);
+    display: grid;
+    gap: 14px;
+}
+
+.health-card--success {
+    border-color: rgba(15, 118, 110, 0.22);
+    box-shadow: 0 16px 36px rgba(15, 118, 110, 0.10);
+}
+
+.health-card--warning {
+    border-color: rgba(245, 158, 11, 0.26);
+    box-shadow: 0 16px 36px rgba(245, 158, 11, 0.08);
+}
+
+.health-card--danger {
+    border-color: rgba(194, 65, 12, 0.26);
+    box-shadow: 0 16px 36px rgba(194, 65, 12, 0.08);
+}
+
+.health-card--idle {
+    border-color: rgba(20, 33, 61, 0.10);
+}
+
+.health-card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.health-card-top h3 {
+    margin: 0;
+    font-size: 1.12rem;
+}
+
+.state-pill--compact {
+    font-size: 0.8rem;
+    padding: 7px 12px;
+}
+
+.health-card-summary,
+.health-card-detail,
+.health-card-action p {
+    margin: 0;
+    line-height: 1.7;
+}
+
+.health-card-summary {
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.health-card-detail,
+.health-card-action p {
+    color: var(--muted);
+}
+
+.health-facts {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.health-fact {
+    padding: 12px 14px;
+    border-radius: 18px;
+    background: rgba(248, 250, 252, 0.82);
+    border: 1px solid rgba(20, 33, 61, 0.06);
+}
+
+.health-fact span {
+    display: block;
+    color: var(--muted);
+    font-size: 0.84rem;
+}
+
+.health-fact strong {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.95rem;
+    word-break: break-word;
+}
+
+.health-card-action {
+    padding: 14px 16px;
+    border-radius: 18px;
+    background: rgba(20, 33, 61, 0.05);
+}
+
+.health-card-action strong {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 0.92rem;
+}
+
 .reveal {
     animation: riseIn 0.55s ease both;
 }
@@ -743,6 +849,7 @@ a {
     .hero-card,
     .content-grid,
     .guide-grid,
+    .health-check-grid,
     .overview-grid,
     .timeline {
         grid-template-columns: 1fr;
@@ -793,6 +900,7 @@ a {
 
     .student-card,
     .card-topline,
+    .health-card-top,
     .panel-heading {
         flex-direction: column;
         align-items: flex-start;
@@ -801,5 +909,9 @@ a {
     .student-rank {
         min-width: 46px;
         min-height: 46px;
+    }
+
+    .health-facts {
+        grid-template-columns: 1fr;
     }
 }

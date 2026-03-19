@@ -17,6 +17,8 @@
   启动时优先采集新 `openid`，采集失败时才回退到 `logs/latest_openid.json`
 - 自动监听签到任务
   通过 WebSocket 接收签到事件，自动更新前端状态
+- 环境体检页
+  可视化检查微信窗口、系统代理、mitm 监听、证书、模板和缓存状态，不看终端也能定位卡点
 - 二维码链接推送
   获取到 `qr_url` 后，实时推送到 PushPlus，并附带课程名、签到名、教师等信息
 - 新老微信双方案兼容
@@ -389,8 +391,12 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 
 常用接口：
 
+- [http://127.0.0.1:5000/health](http://127.0.0.1:5000/health)
+  环境体检页，适合排查部署问题
 - [http://127.0.0.1:5000/api/check_session](http://127.0.0.1:5000/api/check_session)
   查看当前自动会话状态
+- [http://127.0.0.1:5000/api/health](http://127.0.0.1:5000/api/health)
+  查看结构化健康检查结果
 - [http://127.0.0.1:5000/api/openid_status](http://127.0.0.1:5000/api/openid_status)
   查看 `openid` 刷新状态
 - [http://127.0.0.1:5000/qr_code](http://127.0.0.1:5000/qr_code)
@@ -449,6 +455,17 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 - Faye 相关消息
 
 ## 十、常见问题
+
+排查时建议先打开 [http://127.0.0.1:5000/health](http://127.0.0.1:5000/health)。
+
+这个页面会直接告诉你：
+
+- 微信窗口是否已检测到
+- 当前系统代理是否卡在 `127.0.0.1:8080`
+- `mitmproxy` 是否正在监听
+- 根证书是否已经导入
+- `cv` 模板是否缺失
+- `latest_openid.json` 是否可作为回退缓存
 
 ### 1. 新版微信模式提示 `capture proxy ... is not reachable`
 
