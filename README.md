@@ -383,7 +383,7 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 
 ```json
 {
-  "openid": "fedcba9876543210fedcba9876543210",
+  "openid": "0123456789abcdef0123456789abcdef",
   "url": null,
   "captured_at": "2026-03-19T13:38:25+0800",
   "source": "collector"
