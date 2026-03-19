@@ -1,195 +1,83 @@
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenID 获取说明</title>
-    <style>
-        :root {
-            --bg-color: #f5f5f5;
-            --text-color: #333;
-            --container-bg: white;
-            --heading-color: #2c3e50;
-            --border-color: #ccc;
-            --code-bg: #eee;
-        }
-
-        body.dark-theme {
-            --bg-color: #1e1e1e;
-            --text-color: #f0f0f0;
-            --container-bg: #2d2d30;
-            --heading-color: #ffffff;
-            --border-color: #555;
-            --code-bg: #3c3c3c;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            transition: background-color 0.3s, color 0.3s;
-        }
-        
-        .container {
-            background-color: var(--container-bg);
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            padding: 30px;
-        }
-        
-        h1 {
-            color: var(--heading-color);
-            border-bottom: 2px solid var(--border-color);
-            padding-bottom: 10px;
-            margin-bottom: 20px;
-        }
-        
-        h3 {
-            color: var(--heading-color);
-            margin-top: 25px;
-            border-left: 4px solid #3498db;
-            padding-left: 10px;
-        }
-        
-        code {
-            background-color: var(--code-bg);
-            padding: 2px 4px;
-            border-radius: 3px;
-            font-family: monospace;
-        }
-        
-        a {
-            color: #3498db;
-            text-decoration: none;
-        }
-        
-        a:hover {
-            text-decoration: underline;
-        }
-
-        .back-link {
-            display: inline-block;
-            margin-top: 20px;
-            padding: 8px 16px;
-            background: #3498db;
-            color: white;
-            text-decoration: none;
-            border-radius: 6px;
-            transition: background 0.3s;
-        }
-
-        .back-link:hover {
-            background: #2980b9;
-            text-decoration: none;
-        }
-
-        ol, ul {
-            line-height: 1.6;
-        }
-
-        li {
-            margin-bottom: 10px;
-        }
-
-        /* 主题切换按钮 */
-        .theme-toggle {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: var(--container-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            z-index: 1000;
-            transition: all 0.3s;
-        }
-        .theme-toggle:hover {
-            transform: scale(1.1);
-        }
-        .theme-toggle svg {
-            width: 20px;
-            height: 20px;
-            fill: var(--text-color);
-        }
-    </style>
+    <title>微助教签到助手使用说明</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
-<body>
-    <!-- 主题切换按钮 -->
-    <div class="theme-toggle" onclick="toggleTheme()">
-        <svg id="theme-icon" viewBox="0 0 24 24">
-            <!-- 默认显示太阳图标（浅色主题） -->
-            <path id="sun-icon" d="M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5S14.76,7,12,7zM12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35,3-3S10.35,9,12,9zM12,2L9,5l3,3l3-3L12,2zM12,22l-3-3l3-3l3,3L12,22zM2,12l3-3l3,3l-3,3L2,12zM22,12l-3,3l-3-3l3-3L22,12z"/>
-            <!-- 月亮图标默认隐藏 -->
-            <path id="moon-icon" d="M9 2c-1.05 0-2.05.16-3 .46 4.06 1.27 7 5.06 7 9.54 0 4.48-2.94 8.27-7 9.54.95.3 1.95.46 3 .46 5.52 0 10-4.48 10-10S14.52 2 9 2z" style="display: none;"/>
-        </svg>
+<body data-page="usage">
+    <div class="page-shell page-shell--narrow">
+        <header class="hero-card hero-card--compact reveal">
+            <div class="hero-copy">
+                <p class="eyebrow">GET STARTED</p>
+                <h1>第一次使用，看这一页就够了</h1>
+                <p class="hero-description">
+                    这套工具已经补上了一键启动脚本。你不需要手敲命令，只要按顺序做下面几步即可。
+                </p>
+                <div class="hero-actions">
+                    <a class="btn btn-primary" href="/">返回主页</a>
+                </div>
+            </div>
+        </header>
+
+        <section class="guide-grid reveal">
+            <article class="panel">
+                <div class="panel-heading">
+                    <div>
+                        <p class="panel-eyebrow">推荐流程</p>
+                        <h2>三步上手</h2>
+                    </div>
+                </div>
+                <ol class="guide-list">
+                    <li>双击仓库根目录里的 <code>一键启动.bat</code>。</li>
+                    <li>等待脚本自动创建环境、安装依赖，并在浏览器打开本地页面。</li>
+                    <li>保持微信和微助教入口可用，页面会自动获取 OpenID 并监听签到。</li>
+                </ol>
+            </article>
+
+            <article class="panel">
+                <div class="panel-heading">
+                    <div>
+                        <p class="panel-eyebrow">如果自动获取失败</p>
+                        <h2>手动兜底办法</h2>
+                    </div>
+                </div>
+                <ol class="guide-list">
+                    <li>在微信里打开微助教对应页面。</li>
+                    <li>复制带有 <code>openid=</code> 的完整链接，或者只复制 32 位 OpenID。</li>
+                    <li>回到主页，在“手动兜底”区域粘贴后点击启用。</li>
+                </ol>
+            </article>
+        </section>
+
+        <section class="panel reveal">
+            <div class="panel-heading">
+                <div>
+                    <p class="panel-eyebrow">注意事项</p>
+                    <h2>为了提升成功率，建议这样做</h2>
+                </div>
+            </div>
+            <ul class="plain-list">
+                <li>首次运行安装依赖会稍慢，属于正常现象，之后会快很多。</li>
+                <li>OpenID 有时效，长时间未使用时建议重新打开微助教页面刷新一次。</li>
+                <li>自动模式依赖微信窗口处于可识别状态，如果你改了聊天名称或按钮文案，需要同步调整环境变量。</li>
+                <li>需要结束时，双击 <code>停止服务.bat</code> 即可关闭后台服务。</li>
+            </ul>
+        </section>
+
+        <section class="panel reveal">
+            <div class="panel-heading">
+                <div>
+                    <p class="panel-eyebrow">进阶提示</p>
+                    <h2>已有 mitmproxy / CV 抓取方案时</h2>
+                </div>
+            </div>
+            <p class="usage-text">
+                仓库里保留了 mitmproxy 和 CV 抓取脚本，适合已经熟悉这套流程的人做高级调试。
+                普通用户建议优先使用默认的一键启动和页面里的手动兜底方案。
+            </p>
+        </section>
     </div>
-
-    <div class="container">
-        <h1>OpenID 获取说明</h1>
-
-        <p>openid是微信基于应用程序和用户生成的唯一标识，利用这个才知道你是谁。</p>
-
-        <hr>
-
-        <h3>获取openid</h3>
-        <ol>
-            <li>首先打开微助教，然后在浏览器中打开。</li>
-            <li>再看到网址里面，形如<code>https://v18.teachermate.cn/wechat-pro-ssr/?openid=86bf4c441ce0d1957b8d59027e744ce6&from=wzj</code></li>
-            <li><code>openid=*****&···</code> 把 openid 的值复制一下就获取到了。</li>
-            <li>或者直接输入含openid网址</li>
-        </ol>
-
-        <h3>说明</h3>
-        <ul>
-            <li>每一次打开微助教，都会刷新 openid，所以不要多次打开微助教。</li>
-            <li>openid 时效两小时。</li>
-        </ul>
-
-        <a href="/" class="back-link">返回主页</a>
-    </div>
-    <script>
-        // 主题管理
-        function initTheme() {
-            const savedTheme = localStorage.getItem('theme') || 'light';
-            if (savedTheme === 'dark') {
-                document.body.classList.add('dark-theme');
-                document.getElementById('sun-icon').style.display = 'none';
-                document.getElementById('moon-icon').style.display = 'block';
-            }
-        }
-
-        function toggleTheme() {
-            const body = document.body;
-            const sunIcon = document.getElementById('sun-icon');
-            const moonIcon = document.getElementById('moon-icon');
-            
-            if (body.classList.contains('dark-theme')) {
-                // 切换到浅色主题
-                body.classList.remove('dark-theme');
-                sunIcon.style.display = 'block';
-                moonIcon.style.display = 'none';
-                localStorage.setItem('theme', 'light');
-            } else {
-                // 切换到深色主题
-                body.classList.add('dark-theme');
-                sunIcon.style.display = 'none';
-                moonIcon.style.display = 'block';
-                localStorage.setItem('theme', 'dark');
-            }
-        }
-
-        // 初始化主题
-        document.addEventListener('DOMContentLoaded', initTheme);
-    </script>
 </body>
 </html>

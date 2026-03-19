@@ -39,6 +39,8 @@ instance/
 
 # Logs
 *.log
+logs/web.pid
+logs/requirements.sha256
 logs/latest_openid.json
 logs/mitm_openid_result.txt
 @AutomationLog.txt
