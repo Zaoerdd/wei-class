@@ -164,6 +164,18 @@ class CVWeChatOpenIdCollector:
             "menu_item": (0.45, 0.68, 0.30, 0.32),
             "close": (0.70, 0.00, 0.30, 0.20),
         }
+        self.capture_relative_regions: Dict[str, Tuple[float, float, float, float]] = {
+            "session": (0.00, 0.00, 0.38, 0.22),
+            "menu_button": (0.38, 0.80, 0.28, 0.20),
+            "menu_item": (0.45, 0.68, 0.24, 0.18),
+            "close": (0.88, 0.00, 0.09, 0.10),
+        }
+        self.capture_padding: Dict[str, Tuple[int, int]] = {
+            "session": (24, 18),
+            "menu_button": (24, 18),
+            "menu_item": (18, 14),
+            "close": (10, 10),
+        }
         self._pyautogui = None
         self._cv2 = None
         self._numpy = None
@@ -330,6 +342,12 @@ class CVWeChatOpenIdCollector:
         self._click_location(location)
 
     def find_template_location(self, role: str, window_rect: Optional[WindowRect]):
+        match = self.find_template_match(role, window_rect)
+        if match is None:
+            return None
+        return SimpleNamespace(x=match.x, y=match.y)
+
+    def find_template_match(self, role: str, window_rect: Optional[WindowRect]):
         cv2 = self._cv2
         numpy = self._numpy
         mss = self._mss
@@ -338,7 +356,12 @@ class CVWeChatOpenIdCollector:
 
         region = self._build_region(role, window_rect)
         screen = self._capture_match_image(region)
-        for image_path in self._iter_template_candidates(role):
+        try:
+            candidates = list(self._iter_template_candidates(role))
+        except OpenIdCollectorError:
+            candidates = []
+
+        for image_path in candidates:
             template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
             if template is None:
                 continue
@@ -353,10 +376,68 @@ class CVWeChatOpenIdCollector:
             offset_left = region[0] if region else 0
             offset_top = region[1] if region else 0
             return SimpleNamespace(
+                image_path=str(image_path),
+                score=float(max_value),
+                left=offset_left + max_location[0],
+                top=offset_top + max_location[1],
+                width=int(template.shape[1]),
+                height=int(template.shape[0]),
                 x=offset_left + max_location[0] + template.shape[1] // 2,
                 y=offset_top + max_location[1] + template.shape[0] // 2,
             )
         return None
+
+    def capture_local_templates(self, *, chat_state: str = "open", overwrite: bool = True) -> Dict[str, object]:
+        normalized_state = (chat_state or "open").strip().lower()
+        if normalized_state not in {"open", "visible"}:
+            raise OpenIdCollectorError('invalid template capture mode. expected "open" or "visible".')
+
+        self.logger.info("starting local cv template capture flow (chat_state=%s)", normalized_state)
+        self._ensure_dependencies()
+
+        window = self.find_wechat_window()
+        self.activate_window(window)
+        self.template_override_dir.mkdir(parents=True, exist_ok=True)
+
+        browser_window = self.find_browser_window()
+        if browser_window is not None:
+            self.logger.info("browser window already open before template capture, closing it first")
+            self._close_existing_browser(browser_window, window)
+            self.activate_window(window)
+
+        saved_templates = [
+            self._capture_template_artifact("session", window.rect, overwrite=overwrite),
+        ]
+
+        if normalized_state == "visible":
+            self.click_template("session", window.rect)
+            time.sleep(max(0.8, self.click_delay))
+            self.activate_window(window)
+
+        saved_templates.append(self._capture_template_artifact("menu_button", window.rect, overwrite=overwrite))
+        self.click_template("menu_button", window.rect)
+        time.sleep(max(0.4, self.click_delay / 2))
+        self.activate_window(window)
+
+        saved_templates.append(self._capture_template_artifact("menu_item", window.rect, overwrite=overwrite))
+        self.click_template("menu_item", window.rect)
+
+        browser_window = self.wait_for_browser_window(timeout=max(4.0, self.browser_delay + 1.0))
+        self.activate_window(browser_window)
+        time.sleep(max(0.4, self.click_delay / 2))
+
+        saved_templates.append(self._capture_template_artifact("close", browser_window.rect, overwrite=overwrite))
+
+        self.close_browser(window)
+        self.activate_window(window)
+
+        return {
+            "chat_state": normalized_state,
+            "saved_count": len(saved_templates),
+            "override_dir": str(self.template_override_dir),
+            "saved_templates": saved_templates,
+            "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
 
     def close_browser(self, window: WindowInfo) -> None:
         deadline = time.monotonic() + self.close_timeout
@@ -582,6 +663,15 @@ class CVWeChatOpenIdCollector:
             f'cv template "{role}" not found while waiting for {detail}. template={image_path} region={region}'
         )
 
+    def wait_for_browser_window(self, *, timeout: float) -> WindowInfo:
+        deadline = time.monotonic() + max(0.1, timeout)
+        while time.monotonic() < deadline:
+            browser_window = self.find_browser_window()
+            if browser_window is not None:
+                return browser_window
+            time.sleep(self.poll_interval)
+        raise OpenIdCollectorError("WeChat browser window did not appear after clicking 全部(A).")
+
     def wait_for_openid_from_mitm(self, baseline: FileSnapshot) -> str:
         deadline = time.monotonic() + self.capture_timeout
         last_parse_error: Optional[str] = None
@@ -751,11 +841,119 @@ class CVWeChatOpenIdCollector:
         height = max(1, int(window_rect.height * height_ratio))
         return left, top, width, height
 
+    def _build_capture_region(self, role: str, window_rect: WindowRect) -> Tuple[int, int, int, int]:
+        left_ratio, top_ratio, width_ratio, height_ratio = self.capture_relative_regions.get(role, (0.0, 0.0, 1.0, 1.0))
+        left = window_rect.left + int(window_rect.width * left_ratio)
+        top = window_rect.top + int(window_rect.height * top_ratio)
+        width = max(1, int(window_rect.width * width_ratio))
+        height = max(1, int(window_rect.height * height_ratio))
+        return self._clamp_region((left, top, width, height), window_rect)
+
+    def _capture_template_artifact(
+        self,
+        role: str,
+        window_rect: WindowRect,
+        *,
+        overwrite: bool,
+    ) -> Dict[str, object]:
+        output_path = self._local_template_output_path(role)
+        region, capture_source = self._resolve_capture_region(role, window_rect)
+        image = self._capture_color_image(region)
+
+        if output_path.exists() and not overwrite:
+            raise OpenIdCollectorError(f"local template already exists, remove it first or allow overwrite: {output_path}")
+
+        self._write_color_image(output_path, image)
+        height, width = image.shape[:2]
+        return {
+            "role": role,
+            "filename": output_path.name,
+            "path": str(output_path),
+            "capture_source": capture_source,
+            "region": {
+                "left": int(region[0]),
+                "top": int(region[1]),
+                "width": int(region[2]),
+                "height": int(region[3]),
+            },
+            "image_size": {
+                "width": int(width),
+                "height": int(height),
+            },
+        }
+
+    def _resolve_capture_region(self, role: str, window_rect: WindowRect) -> Tuple[Tuple[int, int, int, int], str]:
+        match = self.find_template_match(role, window_rect)
+        if match is not None:
+            capture_region = self._expand_match_region(role, match, window_rect)
+            return capture_region, "matched-template"
+        return self._build_capture_region(role, window_rect), "fallback-region"
+
+    def _expand_match_region(self, role: str, match, window_rect: WindowRect) -> Tuple[int, int, int, int]:
+        pad_x, pad_y = self.capture_padding.get(role, (16, 12))
+        left = int(match.left) - pad_x
+        top = int(match.top) - pad_y
+        width = int(match.width) + pad_x * 2
+        height = int(match.height) + pad_y * 2
+        return self._clamp_region((left, top, width, height), window_rect)
+
+    def _clamp_region(
+        self,
+        region: Tuple[int, int, int, int],
+        window_rect: WindowRect,
+    ) -> Tuple[int, int, int, int]:
+        left, top, width, height = region
+        right = left + width
+        bottom = top + height
+
+        left = max(window_rect.left, left)
+        top = max(window_rect.top, top)
+        right = min(window_rect.right, right)
+        bottom = min(window_rect.bottom, bottom)
+
+        return left, top, max(1, right - left), max(1, bottom - top)
+
+    def _capture_color_image(self, region: Tuple[int, int, int, int]):
+        cv2 = self._cv2
+        if cv2 is None:
+            raise OpenIdCollectorError("cv matching dependencies are not initialized")
+        image = self._capture_screen_image(region)
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
+    def _write_color_image(self, path: Path, image) -> None:
+        cv2 = self._cv2
+        if cv2 is None:
+            raise OpenIdCollectorError("cv matching dependencies are not initialized")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(path), image):
+            raise OpenIdCollectorError(f"failed to write template image: {path}")
+
+    def _local_template_output_path(self, role: str) -> Path:
+        filename = self.template_names.get(role)
+        if not filename:
+            raise OpenIdCollectorError(f"unknown cv template role: {role}")
+        return self.template_override_dir / Path(filename).name
+
+    def _close_existing_browser(self, browser_window: WindowInfo, return_window: WindowInfo) -> None:
+        try:
+            self._close_browser_window(browser_window, return_window)
+            return
+        except Exception:
+            pass
+        self._close_browser_with_shortcuts(browser_window, return_window)
+
     def _capture_match_image(self, region: Optional[Tuple[int, int, int, int]]):
         cv2 = self._cv2
+        if cv2 is None:
+            raise OpenIdCollectorError("cv matching dependencies are not initialized")
+
+        image = self._capture_screen_image(region)
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+
+    def _capture_screen_image(self, region: Optional[Tuple[int, int, int, int]]):
         numpy = self._numpy
         mss = self._mss
-        if cv2 is None or numpy is None or mss is None:
+        if numpy is None or mss is None:
             raise OpenIdCollectorError("cv matching dependencies are not initialized")
 
         try:
@@ -777,7 +975,7 @@ class CVWeChatOpenIdCollector:
         image = numpy.array(grabbed)
         if image.size == 0:
             raise OpenIdCollectorError("screen grab returned an empty image")
-        return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+        return image
 
     def _get_window_text(self, hwnd: int) -> str:
         length = user32.GetWindowTextLengthW(hwnd)

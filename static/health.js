@@ -2,6 +2,10 @@ const healthState = {
     pollHandle: null,
     isFetching: false,
     lastReport: null,
+    templateCapture: {
+        busy: false,
+        outcome: null,
+    },
 };
 
 const mojibakePattern = /[�锛鎴姝鏈褰娌鑾彇鍒閿辫缃粶璇]/;
@@ -137,6 +141,16 @@ function templateSourceTone(source) {
         return "success";
     }
     return "idle";
+}
+
+function templateCaptureSourceLabel(source) {
+    if (source === "matched-template") {
+        return "根据现有模板定位后截图";
+    }
+    if (source === "fallback-region") {
+        return "按窗口区域兜底截图";
+    }
+    return "自动截图";
 }
 
 function renderBanner(report) {
@@ -324,6 +338,75 @@ function renderTemplateStatus(report) {
     }
 }
 
+function renderTemplateCapture(report) {
+    const summary = report.summary || {};
+    const method = summary.collector_method;
+    const captureState = healthState.templateCapture;
+    const supported = method === "cv";
+    const openButton = $("template-capture-open-btn");
+    const visibleButton = $("template-capture-visible-btn");
+    const pill = $("health-template-capture-pill");
+    const status = $("health-template-capture-status");
+    const results = $("health-template-capture-results");
+
+    openButton.disabled = captureState.busy || !supported;
+    visibleButton.disabled = captureState.busy || !supported;
+    openButton.textContent = captureState.busy ? "正在采集..." : "已经在聊天页，开始采集";
+    visibleButton.textContent = captureState.busy ? "正在采集..." : "只在左侧可见，帮我点开后采集";
+
+    let outcome = captureState.outcome;
+    if (!supported) {
+        outcome = {
+            tone: "idle",
+            pill: "不可用",
+            title: "当前不是 cv 模式",
+            message: "只有新版微信的 cv 模式才需要自动采集本机模板。",
+            results: [],
+        };
+    } else if (!outcome) {
+        outcome = {
+            tone: "idle",
+            pill: "待开始",
+            title: "尚未开始自动采集",
+            message: "确认微信窗口可见后，再选择当前所处状态开始采集。",
+            results: [],
+        };
+    }
+
+    pill.textContent = outcome.pill || "待开始";
+    status.className = `capture-status capture-status--${outcome.tone || "idle"}`;
+    status.innerHTML = `
+        <strong>${escapeHtml(safeText(outcome.title, "自动采集本机模板"))}</strong>
+        <p>${escapeHtml(safeText(outcome.message, "等待开始"))}</p>
+    `;
+
+    if (Array.isArray(outcome.results) && outcome.results.length) {
+        results.className = "capture-result-list";
+        results.innerHTML = outcome.results.map((item) => {
+            const size = item.image_size || {};
+            const width = size.width || "-";
+            const height = size.height || "-";
+            return `
+                <article class="capture-result-card">
+                    <div>
+                        <p class="panel-eyebrow">模板角色</p>
+                        <h3>${escapeHtml(templateRoleLabel(item.role))}</h3>
+                    </div>
+                    <p class="capture-result-path">${escapeHtml(safeText(item.path, "-"))}</p>
+                    <div class="capture-result-meta">
+                        <span>${escapeHtml(templateCaptureSourceLabel(item.capture_source))}</span>
+                        <strong>${escapeHtml(`${width} x ${height}`)}</strong>
+                    </div>
+                </article>
+            `;
+        }).join("");
+        return;
+    }
+
+    results.className = "capture-result-list hidden";
+    results.innerHTML = "";
+}
+
 function renderReport(report) {
     healthState.lastReport = report;
     renderBanner(report);
@@ -332,6 +415,7 @@ function renderReport(report) {
     renderChecks(report);
     renderRuntime(report);
     renderTemplateStatus(report);
+    renderTemplateCapture(report);
 }
 
 function renderLoadError(message) {
@@ -353,6 +437,14 @@ function renderLoadError(message) {
             <strong>模板状态暂时不可用</strong>
             <p>${escapeHtml(message)}</p>
         </div>
+    `;
+    $("template-capture-open-btn").disabled = true;
+    $("template-capture-visible-btn").disabled = true;
+    $("health-template-capture-pill").textContent = "不可用";
+    $("health-template-capture-status").className = "capture-status capture-status--danger";
+    $("health-template-capture-status").innerHTML = `
+        <strong>自动采集入口暂时不可用</strong>
+        <p>${escapeHtml(message)}</p>
     `;
 }
 
@@ -436,9 +528,76 @@ async function exportSupportBundle() {
     }
 }
 
+function updateTemplateCaptureOutcome(outcome) {
+    healthState.templateCapture.outcome = outcome;
+    if (healthState.lastReport) {
+        renderTemplateCapture(healthState.lastReport);
+    }
+}
+
+async function runTemplateCapture(chatState) {
+    if (healthState.templateCapture.busy) {
+        return;
+    }
+
+    healthState.templateCapture.busy = true;
+    updateTemplateCaptureOutcome({
+        tone: "warning",
+        pill: "采集中",
+        title: "正在自动采集本机模板",
+        message: "请保持微信窗口可见，不要手动切换聊天页或最小化微信。",
+        results: [],
+    });
+
+    try {
+        const response = await fetch("/api/template_capture", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                chat_state: chatState,
+                overwrite: true,
+            }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.success) {
+            throw new Error(payload.message || `HTTP ${response.status}`);
+        }
+
+        const capture = payload.capture || {};
+        updateTemplateCaptureOutcome({
+            tone: "success",
+            pill: "已完成",
+            title: "本机模板采集完成",
+            message: safeText(payload.message, "现在可以回到上面的模板状态区确认结果。"),
+            results: Array.isArray(capture.saved_templates) ? capture.saved_templates : [],
+        });
+        await fetchHealth();
+    } catch (error) {
+        const message = error instanceof Error
+            ? error.message
+            : "自动采集本机模板失败，请先检查微信窗口和当前聊天页状态。";
+        updateTemplateCaptureOutcome({
+            tone: "danger",
+            pill: "失败",
+            title: "本机模板采集失败",
+            message,
+            results: [],
+        });
+    } finally {
+        healthState.templateCapture.busy = false;
+        if (healthState.lastReport) {
+            renderTemplateCapture(healthState.lastReport);
+        }
+    }
+}
+
 function bindEvents() {
     $("health-refresh-btn").addEventListener("click", () => fetchHealth());
     $("health-export-btn").addEventListener("click", () => exportSupportBundle());
+    $("template-capture-open-btn").addEventListener("click", () => runTemplateCapture("open"));
+    $("template-capture-visible-btn").addEventListener("click", () => runTemplateCapture("visible"));
 }
 
 function startPolling() {

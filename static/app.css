@@ -873,6 +873,94 @@ a {
     font-size: 0.92rem;
 }
 
+.capture-guide {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 18px;
+}
+
+.capture-guide-item,
+.capture-result-card,
+.capture-status {
+    border-radius: 22px;
+    border: 1px solid rgba(20, 33, 61, 0.08);
+    background: rgba(255, 255, 255, 0.78);
+}
+
+.capture-guide-item {
+    padding: 18px;
+}
+
+.capture-guide-item strong,
+.capture-status strong,
+.capture-result-card h3 {
+    display: block;
+    margin: 0 0 8px;
+}
+
+.capture-guide-item p,
+.capture-status p,
+.capture-result-path {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.7;
+}
+
+.capture-status {
+    margin-top: 18px;
+    padding: 18px 20px;
+}
+
+.capture-status--success {
+    border-color: rgba(15, 118, 110, 0.22);
+    box-shadow: 0 16px 36px rgba(15, 118, 110, 0.08);
+}
+
+.capture-status--warning {
+    border-color: rgba(245, 158, 11, 0.28);
+    box-shadow: 0 16px 36px rgba(245, 158, 11, 0.08);
+}
+
+.capture-status--danger {
+    border-color: rgba(194, 65, 12, 0.28);
+    box-shadow: 0 16px 36px rgba(194, 65, 12, 0.08);
+}
+
+.capture-status--idle {
+    border-color: rgba(20, 33, 61, 0.10);
+}
+
+.capture-result-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 18px;
+}
+
+.capture-result-card {
+    padding: 18px;
+    display: grid;
+    gap: 12px;
+}
+
+.capture-result-card h3 {
+    font-size: 1.06rem;
+}
+
+.capture-result-path {
+    word-break: break-all;
+}
+
+.capture-result-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 0.92rem;
+}
+
 .reveal {
     animation: riseIn 0.55s ease both;
 }
@@ -906,6 +994,8 @@ a {
     .guide-grid,
     .health-check-grid,
     .template-grid,
+    .capture-guide,
+    .capture-result-list,
     .status-glance-grid,
     .overview-grid,
     .timeline {

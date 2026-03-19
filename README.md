@@ -259,6 +259,13 @@ python -m venv .venv-mitm
 
 体检页和 `GET /api/template_status` 会直接显示每张模板当前来自默认目录、本机覆盖目录还是仍然缺失，方便确认当前到底命中了哪一套模板。
 
+如果你是第一次在这台机器上跑新版微信，也可以直接打开 [http://127.0.0.1:5000/health](http://127.0.0.1:5000/health)，在页面底部使用“自动采集本机模板”向导。向导支持两种起点：
+
+- 已经在 `微助教服务号` 聊天页
+- 只是在左侧会话列表里可见，让程序先尝试点开再采集
+
+采集完成后会把本机模板直接写到 [cv_templates_local](cv_templates_local)，并自动刷新上面的模板状态区。
+
 可用模板文件：
 
 - `session.png`
@@ -447,6 +454,8 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
   查看结构化健康检查结果，结果里也会包含模板状态快照
 - [http://127.0.0.1:5000/api/template_status](http://127.0.0.1:5000/api/template_status)
   单独查看模板来源、覆盖关系、缺失模板和最近更新时间
+- `POST /api/template_capture`
+  触发一次自动采集本机模板；体检页底部的“自动采集本机模板”向导就是调用这个接口
 - [http://127.0.0.1:5000/api/support_bundle](http://127.0.0.1:5000/api/support_bundle)
   导出一份脱敏诊断包，适合交给开发者排查
 - [http://127.0.0.1:5000/api/openid_status](http://127.0.0.1:5000/api/openid_status)

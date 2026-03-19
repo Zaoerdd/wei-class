@@ -2,6 +2,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -258,6 +259,79 @@ class RuntimeDiagnosticsSafetyTests(unittest.TestCase):
             self.assertEqual(templates["session"]["source"], "default")
             self.assertEqual(templates["menu_button"]["source"], "override")
             self.assertEqual(templates["close"]["source"], "missing")
+
+    def test_template_capture_endpoint_returns_capture_result(self) -> None:
+        capture_calls = []
+        dummy_collector = SimpleNamespace(
+            method_name="cv",
+            capture_local_templates=lambda **kwargs: capture_calls.append(kwargs)
+            or {
+                "chat_state": kwargs["chat_state"],
+                "saved_count": 4,
+                "override_dir": "D:/wei-class/cv_templates_local",
+                "saved_templates": [
+                    {
+                        "role": "session",
+                        "path": "D:/wei-class/cv_templates_local/session.png",
+                        "capture_source": "matched-template",
+                        "image_size": {"width": 180, "height": 60},
+                    }
+                ],
+            },
+        )
+
+        with patch.object(web, "collector", dummy_collector), patch.object(
+            web,
+            "openid_refresh_manager",
+            SimpleNamespace(is_refreshing=False),
+        ), patch.object(
+            web,
+            "build_template_snapshot",
+            return_value={"counts": {"total": 4, "override": 4}},
+        ):
+            response = web.app.test_client().post("/api/template_capture", json={"chat_state": "visible"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["capture"]["saved_count"], 4)
+        self.assertEqual(payload["capture"]["saved_templates"][0]["role"], "session")
+        self.assertEqual(capture_calls, [{"chat_state": "visible", "overwrite": True}])
+
+    def test_template_capture_endpoint_rejects_when_refresh_is_running(self) -> None:
+        dummy_collector = SimpleNamespace(method_name="cv", capture_local_templates=lambda **kwargs: None)
+
+        with patch.object(web, "collector", dummy_collector), patch.object(
+            web,
+            "openid_refresh_manager",
+            SimpleNamespace(is_refreshing=True),
+        ):
+            response = web.app.test_client().post("/api/template_capture", json={"chat_state": "open"})
+
+        self.assertEqual(response.status_code, 409)
+        payload = response.get_json()
+        self.assertFalse(payload["success"])
+        self.assertIn("自动刷新 OpenID", payload["message"])
+
+    def test_template_capture_endpoint_rejects_when_refresh_lock_is_busy(self) -> None:
+        dummy_collector = SimpleNamespace(method_name="cv", capture_local_templates=lambda **kwargs: None)
+        refresh_lock = threading.Lock()
+        self.assertTrue(refresh_lock.acquire(blocking=False))
+
+        try:
+            with patch.object(web, "collector", dummy_collector), patch.object(
+                web,
+                "openid_refresh_manager",
+                SimpleNamespace(is_refreshing=False, _refresh_lock=refresh_lock),
+            ):
+                response = web.app.test_client().post("/api/template_capture", json={"chat_state": "open"})
+        finally:
+            refresh_lock.release()
+
+        self.assertEqual(response.status_code, 409)
+        payload = response.get_json()
+        self.assertFalse(payload["success"])
+        self.assertIn("准备执行", payload["message"])
 
 
 if __name__ == "__main__":

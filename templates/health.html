@@ -111,6 +111,43 @@
                 </div>
             </div>
         </section>
+
+        <section class="panel reveal" aria-labelledby="health-template-capture-title">
+            <div class="panel-heading">
+                <div>
+                    <p class="panel-eyebrow">模板向导</p>
+                    <h2 id="health-template-capture-title">自动采集本机模板</h2>
+                </div>
+                <span class="panel-badge" id="health-template-capture-pill">待开始</span>
+            </div>
+            <p class="usage-text">
+                这一步会自动识别微信主窗口，并按 `微助教服务号 -> 学生 -> 全部 -> 关闭` 的顺序采集
+                `session.png`、`student_button.png`、`all_item.png`、`close_button.png`，最后写入 `cv_templates_local`。
+            </p>
+            <div class="capture-guide">
+                <div class="capture-guide-item">
+                    <strong>模式 A</strong>
+                    <p>如果你现在已经在微助教聊天页，并且底部能看到“学生”按钮，直接点“已经在聊天页”。</p>
+                </div>
+                <div class="capture-guide-item">
+                    <strong>模式 B</strong>
+                    <p>如果只是能在左侧会话列表里看到“微助教服务号”，点“只在左侧可见”，程序会先尝试点开它再继续采集。</p>
+                </div>
+                <div class="capture-guide-item">
+                    <strong>开始前</strong>
+                    <p>请保持微信窗口可见，不要最小化，也不要在采集中手动切换到别的聊天页。</p>
+                </div>
+            </div>
+            <div class="hero-actions">
+                <button class="btn btn-primary" id="template-capture-open-btn" type="button">已经在聊天页，开始采集</button>
+                <button class="btn btn-secondary" id="template-capture-visible-btn" type="button">只在左侧可见，帮我点开后采集</button>
+            </div>
+            <div class="capture-status capture-status--idle" id="health-template-capture-status" aria-live="polite">
+                <strong>尚未开始自动采集</strong>
+                <p>首次部署新版微信时，可以先在这里生成本机模板，再回到上面的模板状态区确认结果。</p>
+            </div>
+            <div class="capture-result-list hidden" id="health-template-capture-results"></div>
+        </section>
     </div>
 </body>
 </html>

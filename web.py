@@ -1509,6 +1509,7 @@ openid_refresh_manager = None
 
 app = Flask(__name__)
 runtime_init_lock = threading.Lock()
+template_capture_lock = threading.Lock()
 runtime_initialized = False
 RUNTIME_STATE_SCHEMA_VERSION = 1
 HEALTH_STATUS_ORDER = {"fail": 0, "warn": 1, "pass": 2, "skip": 3}
@@ -2409,7 +2410,7 @@ def build_cv_template_health_check(
             "fail",
             f"缺少 {len(missing_roles)} 个 cv 模板文件。",
             detail=detail,
-            action="把缺少的模板补到 cv_templates 或 cv_templates_local 后再重试。",
+            action="优先去体检页底部使用“自动采集本机模板”，或手动把缺少模板补到 cv_templates_local 后再重试。",
             facts=facts,
         )
 
@@ -2419,7 +2420,7 @@ def build_cv_template_health_check(
         "pass",
         "cv 模式需要的模板文件都已就绪。",
         detail=detail,
-        action="如果按钮样式不匹配，再把本机模板补到 cv_templates_local。",
+        action="如果按钮样式不匹配，可以去体检页底部重新自动采集本机模板。",
         facts=facts,
     )
 
@@ -2783,6 +2784,53 @@ def health_status():
 def template_status():
     ensure_runtime_configured()
     return jsonify(build_template_snapshot())
+
+
+@app.route("/api/template_capture", methods=["POST"])
+def template_capture():
+    ensure_runtime_configured()
+
+    if getattr(collector, "method_name", None) != "cv" or not hasattr(collector, "capture_local_templates"):
+        return jsonify({"success": False, "message": "当前运行方式不是 cv，不能自动采集本机模板。"}), 400
+
+    if openid_refresh_manager is not None and getattr(openid_refresh_manager, "is_refreshing", False):
+        return jsonify({"success": False, "message": "当前正在自动刷新 OpenID，请等本轮结束后再采集模板。"}), 409
+
+    if not template_capture_lock.acquire(blocking=False):
+        return jsonify({"success": False, "message": "已有模板采集任务正在运行，请稍候刷新页面。"}), 409
+
+    refresh_lock = getattr(openid_refresh_manager, "_refresh_lock", None)
+    refresh_lock_acquired = False
+    if refresh_lock is not None:
+        refresh_lock_acquired = refresh_lock.acquire(blocking=False)
+        if not refresh_lock_acquired:
+            template_capture_lock.release()
+            return jsonify({"success": False, "message": "当前有 OpenID 刷新任务正在准备执行，请稍候再试。"}), 409
+
+    payload = request.get_json(silent=True) or {}
+    chat_state = str(payload.get("chat_state") or "open").strip().lower()
+    overwrite = bool(payload.get("overwrite", True))
+
+    try:
+        capture_result = collector.capture_local_templates(chat_state=chat_state, overwrite=overwrite)
+        template_snapshot = build_template_snapshot()
+        return jsonify(
+            {
+                "success": True,
+                "message": f"已完成 {capture_result.get('saved_count', 0)} 张本机模板采集。",
+                "capture": capture_result,
+                "template_status": template_snapshot,
+            }
+        )
+    except OpenIdCollectorError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("自动采集本机模板失败: %s", exc)
+        return jsonify({"success": False, "message": f"自动采集本机模板失败: {exc}"}), 500
+    finally:
+        if refresh_lock_acquired:
+            refresh_lock.release()
+        template_capture_lock.release()
 
 
 @app.route("/api/support_bundle")
