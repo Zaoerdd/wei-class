@@ -38,6 +38,8 @@ instance/
 
 # Logs
 *.log
+logs/latest_openid.json
+@AutomationLog.txt
 
 # Editor and OS files
 .vscode/
