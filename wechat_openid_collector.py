@@ -4,6 +4,7 @@ import argparse
 import ctypes
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -424,6 +425,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         description="Use uiautomation to open WeChat -> 微助教服务号 -> 学生 -> 全部 and extract openid.",
     )
     parser.add_argument("--once", action="store_true", help="run exactly once and print the captured result")
+    parser.add_argument(
+        "--method",
+        choices=["uiautomation", "cv"],
+        default=os.getenv("WECHAT_OPENID_METHOD", "uiautomation"),
+        help="choose how to collect openid: uiautomation or cv (template click + mitmproxy)",
+    )
     parser.add_argument("--interval-hours", type=float, default=2.0, help="repeat interval in hours, default: 2")
     parser.add_argument("--session-name", default="微助教服务号", help="visible WeChat chat/session name in the left sidebar")
     parser.add_argument("--menu-button", default="学生", help="bottom menu button prefix, default: 学生")
@@ -438,6 +445,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     logger = build_logger(args.log_file)
+    from wechat_openid_strategy import build_openid_collector
 
     config = CollectorConfig(
         session_name=args.session_name,
@@ -449,7 +457,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         output_path=args.output,
         log_path=args.log_file,
     )
-    collector = WeChatOpenIdCollector(config, logger)
+    collector = build_openid_collector(args.method, config, logger)
 
     try:
         if args.once:
