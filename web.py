@@ -42,6 +42,16 @@ LOG_DIR = BASE_DIR / "logs"
 FAYE_LOG_PATH = LOG_DIR / "faye_history.log"
 OPENID_CACHE_PATH = BASE_DIR / "logs" / "latest_openid.json"
 OPENID_HEX_RE = re.compile(r"^[a-fA-F0-9]{32}$")
+OPENID_INVALID_MESSAGE_KEYWORDS = (
+    "登录信息失效",
+    "登录失效",
+    "openid 无效",
+    "openid失效",
+    "openid invalid",
+    "login invalid",
+    "login expired",
+    "unauthorized",
+)
 
 
 def _build_faye_file_logger() -> logging.Logger:
@@ -129,6 +139,28 @@ def safe_float(value: Any, fallback: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def extract_response_message(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+
+    for field_name in ("msgClient", "message", "msg", "errorMsg", "detail"):
+        value = payload.get(field_name)
+        if isinstance(value, str):
+            message = value.strip()
+            if message:
+                return message
+    return None
+
+
+def is_openid_invalid_response(payload: Any) -> bool:
+    message = extract_response_message(payload)
+    if not message:
+        return False
+
+    lowered = message.lower()
+    return any(keyword.lower() in lowered for keyword in OPENID_INVALID_MESSAGE_KEYWORDS)
 
 
 def normalize_signed_student(student: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -409,6 +441,7 @@ class Pipeline:
         self.pending_sign_keys: Set[Tuple[Any, Any]] = set()
         self.sign_results: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
         self.latest_result_meta: Optional[Dict[str, Any]] = None
+        self.invalid_openid_refresh_requested = False
 
     def start(self) -> None:
         if self.is_running:
@@ -458,6 +491,7 @@ class Pipeline:
         try:
             data = getData(self.openid)
             if data and isinstance(data, list) and len(data) > 0:
+                self.invalid_openid_refresh_requested = False
                 result = []
                 for item in data:
                     if all(key in item for key in ["courseId", "signId", "isQR", "isGPS"]):
@@ -470,6 +504,9 @@ class Pipeline:
                 self.active_signs = []
                 self.pending_sign_keys.clear()
                 return "当前没有进行中的签到"
+            if is_openid_invalid_response(data):
+                invalid_message = extract_response_message(data) or "登录信息失效，请退出后重试"
+                return await self._handle_invalid_openid(invalid_message)
             if isinstance(data, dict) and "message" in data:
                 self.active_signs = []
                 self.pending_sign_keys.clear()
@@ -482,6 +519,27 @@ class Pipeline:
             self.active_signs = []
             self.pending_sign_keys.clear()
             return "网络请求失败"
+
+    async def _handle_invalid_openid(self, server_message: Optional[str] = None) -> str:
+        waiting_message = "检测到当前 OpenID 已失效，正在自动重新获取..."
+        if server_message:
+            waiting_message = f"{server_message}，正在自动重新获取..."
+
+        self.active_signs = []
+        self.pending_sign_keys.clear()
+        self.message = waiting_message
+        self.latest_result_meta = build_result_meta(None, waiting_message)
+
+        if not self.invalid_openid_refresh_requested and openid_refresh_manager is not None:
+            self.invalid_openid_refresh_requested = True
+            logger.warning("当前 OpenID 已失效，准备自动刷新: %s", mask_openid(self.openid))
+            openid_refresh_manager.invalidate_openid(
+                self.openid,
+                reason=server_message,
+                refresh_reason="openid-invalid",
+            )
+
+        return waiting_message
 
     async def process_signatures(self, data: List[Dict[str, Any]]) -> None:
         for item in data:
@@ -658,6 +716,19 @@ class Pipeline:
                 lat=lat,
                 lon=lon,
             )
+            if is_openid_invalid_response(sign_result):
+                invalid_message = extract_response_message(sign_result) or "登录信息失效，请退出后重试"
+                frontend_message = await self._handle_invalid_openid(invalid_message)
+                result_meta = build_result_meta(
+                    item,
+                    frontend_message,
+                    result_ready=True,
+                    is_error=True,
+                    frontend_message=frontend_message,
+                )
+                self._store_result_meta(sign_key, result_meta)
+                return
+
             sign_rank = safe_int(sign_result.get("signRank"))
             frontend_message = build_sign_result_text(sign_result)
             sign_completed = is_sign_result_success(sign_result, frontend_message, sign_rank)
@@ -925,6 +996,48 @@ class OpenIdRefreshManager:
                 self.is_refreshing = False
             self._refresh_lock.release()
 
+    def request_refresh_async(self, reason: str, allow_file_fallback: bool = False) -> bool:
+        def _runner() -> None:
+            try:
+                self.refresh_openid(reason=reason, allow_file_fallback=allow_file_fallback)
+            finally:
+                self._set_next_refresh_time()
+
+        refresh_thread = threading.Thread(
+            target=_runner,
+            daemon=True,
+            name=f"OpenIdRefreshRequest-{int(time.time() * 1000)}",
+        )
+        refresh_thread.start()
+        return True
+
+    def invalidate_openid(
+        self,
+        openid: str,
+        *,
+        reason: Optional[str] = None,
+        refresh_reason: str = "openid-invalid",
+        allow_file_fallback: bool = False,
+    ) -> bool:
+        sanitized_reason = (reason or "").strip()
+        public_message = "检测到当前 OpenID 已失效，正在自动重新获取..."
+        if sanitized_reason:
+            public_message = f"{sanitized_reason}，正在自动重新获取..."
+
+        with self._state_lock:
+            if self.current_openid != openid:
+                return False
+            self.current_openid = None
+            self.current_source = None
+            self.current_url = None
+            self.used_file_fallback = False
+            self.last_error = public_message
+
+        stop_pipeline(openid)
+        logger.warning("已标记失效 OpenID，并开始自动刷新: %s", mask_openid(openid))
+        self.request_refresh_async(reason=refresh_reason, allow_file_fallback=allow_file_fallback)
+        return True
+
     def use_manual_openid(self, openid: str) -> Pipeline:
         record = self._validate_record({"openid": openid, "captured_at": datetime.now().astimezone().isoformat()})
         self._apply_record(record, source="manual")
@@ -978,8 +1091,11 @@ class OpenIdRefreshManager:
             raise OpenIdCollectorError("OpenID 格式不正确，应为 32 位十六进制字符串")
 
         api_response = getData(openid)
+        if is_openid_invalid_response(api_response):
+            invalid_message = extract_response_message(api_response) or "登录信息失效，请退出后重试"
+            raise OpenIdCollectorError(f"OpenID 无效: {invalid_message}")
         if isinstance(api_response, dict) and "message" in api_response:
-            raise OpenIdCollectorError(f"OpenID 无效: {api_response['message']}")
+            raise OpenIdCollectorError(f"OpenID 验证失败: {api_response['message']}")
         if not isinstance(api_response, list):
             raise OpenIdCollectorError("OpenID 验证结果格式异常")
 
