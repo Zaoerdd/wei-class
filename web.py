@@ -29,6 +29,7 @@ from flask import Flask, jsonify, make_response, render_template, request, send_
 import ad
 from getSocket import TeacherMateWebSocketClient
 from getdata import getData, get_student_profile, submit_sign
+from runtime_config import LOCAL_CONFIG_PATH, get_runtime_settings
 from wechat_openid_collector import (
     DEFAULT_LOG_PATH as COLLECTOR_LOG_PATH,
     DEFAULT_OUTPUT_PATH as COLLECTOR_OUTPUT_PATH,
@@ -49,7 +50,6 @@ BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 FAYE_LOG_PATH = LOG_DIR / "faye_history.log"
 OPENID_CACHE_PATH = BASE_DIR / "logs" / "latest_openid.json"
-LOCAL_CONFIG_PATH = BASE_DIR / "local_config.json"
 OPENID_HEX_RE = re.compile(r"^[a-fA-F0-9]{32}$")
 OPENID_INVALID_MESSAGE_KEYWORDS = (
     "登录信息失效",
@@ -95,58 +95,6 @@ SENSITIVE_STRUCTURED_KEYS = {
     "token",
     "useropenid",
 }
-
-
-def load_local_config(config_path: Path) -> Dict[str, Any]:
-    if not config_path.exists():
-        return {}
-
-    try:
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning("加载本地配置文件失败 %s: %s", config_path, exc)
-        return {}
-
-    if not isinstance(payload, dict):
-        logger.warning("本地配置文件格式无效，应为 JSON 对象: %s", config_path)
-        return {}
-
-    return payload
-
-
-LOCAL_CONFIG = load_local_config(LOCAL_CONFIG_PATH)
-
-
-def get_local_config_value(*keys: str, default: Optional[Any] = None) -> Optional[Any]:
-    current: Any = LOCAL_CONFIG
-    for key in keys:
-        if not isinstance(current, dict) or key not in current:
-            return default
-        current = current[key]
-    return current
-
-
-def get_runtime_setting(
-    env_name: str,
-    *config_keys: str,
-    default: Optional[str] = None,
-) -> Optional[str]:
-    env_value = os.getenv(env_name)
-    if env_value is not None:
-        stripped = str(env_value).strip()
-        if stripped:
-            return stripped
-
-    if config_keys:
-        config_value = get_local_config_value(*config_keys)
-        if config_value is not None:
-            stripped = str(config_value).strip()
-            if stripped:
-                return stripped
-
-    return default
-
-
 def _build_faye_file_logger() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1482,21 +1430,9 @@ class OpenIdRefreshManager:
 
 
 collector_logger = build_collector_logger(COLLECTOR_LOG_PATH)
-collector_config = CollectorConfig(
-    session_name=os.getenv("WECHAT_SESSION_NAME", "微助教服务号"),
-    menu_button_prefix=os.getenv("WECHAT_MENU_BUTTON", "学生"),
-    menu_item_prefix=os.getenv("WECHAT_MENU_ITEM", "全部"),
-    interval_hours=2.0,
-    control_timeout_seconds=float(os.getenv("WECHAT_CONTROL_TIMEOUT", "10")),
-    browser_timeout_seconds=float(os.getenv("WECHAT_BROWSER_TIMEOUT", "15")),
-    output_path=COLLECTOR_OUTPUT_PATH,
-    log_path=COLLECTOR_LOG_PATH,
-)
-pushplus_notifier = PushPlusNotifier(
-    token=get_runtime_setting("PUSHPLUS_TOKEN", "pushplus", "token"),
-    topic=get_runtime_setting("PUSHPLUS_TOPIC", "pushplus", "topic"),
-)
-collector_method = normalize_openid_method(os.getenv("WECHAT_OPENID_METHOD", "uiautomation"))
+collector_config = None
+pushplus_notifier = None
+collector_method = "uiautomation"
 collector = None
 openid_refresh_manager = None
 
@@ -1508,9 +1444,25 @@ HEALTH_STATUS_ORDER = {"fail": 0, "warn": 1, "pass": 2, "skip": 3}
 
 
 def configure_runtime(openid_method: Optional[str] = None) -> None:
-    global collector_method, collector, openid_refresh_manager, runtime_initialized
+    global collector_config, pushplus_notifier, collector_method, collector, openid_refresh_manager, runtime_initialized
 
-    selected_method = normalize_openid_method(openid_method or os.getenv("WECHAT_OPENID_METHOD", "uiautomation"))
+    runtime_settings = get_runtime_settings(reload=True)
+    collector_config = CollectorConfig(
+        session_name=runtime_settings.get("wechat.session_name"),
+        menu_button_prefix=runtime_settings.get("wechat.menu_button"),
+        menu_item_prefix=runtime_settings.get("wechat.menu_item"),
+        interval_hours=2.0,
+        control_timeout_seconds=runtime_settings.get("wechat.control_timeout_seconds"),
+        browser_timeout_seconds=runtime_settings.get("wechat.browser_timeout_seconds"),
+        output_path=COLLECTOR_OUTPUT_PATH,
+        log_path=COLLECTOR_LOG_PATH,
+    )
+    pushplus_notifier = PushPlusNotifier(
+        token=runtime_settings.get("pushplus.token"),
+        topic=runtime_settings.get("pushplus.topic"),
+    )
+
+    selected_method = normalize_openid_method(openid_method or runtime_settings.get("openid.method"))
     collector_method = selected_method
     collector = build_openid_collector(selected_method, collector_config, collector_logger)
     openid_refresh_manager = OpenIdRefreshManager(
@@ -1804,8 +1756,9 @@ def is_path_within(path: Path, root: Path) -> bool:
 
 
 def get_capture_proxy_endpoint() -> Tuple[str, int]:
-    host = str(getattr(collector, "capture_proxy_host", None) or os.getenv("WECHAT_CV_PROXY_HOST", "127.0.0.1")).strip()
-    port = safe_int(getattr(collector, "capture_proxy_port", None) or os.getenv("WECHAT_CV_PROXY_PORT", "8080")) or 8080
+    runtime_settings = get_runtime_settings(reload=True)
+    host = str(getattr(collector, "capture_proxy_host", None) or runtime_settings.get("cv.proxy_host")).strip()
+    port = safe_int(getattr(collector, "capture_proxy_port", None) or runtime_settings.get("cv.proxy_port")) or 8080
     return host or "127.0.0.1", port
 
 
@@ -1922,7 +1875,8 @@ def run_powershell_json(script: str, args: List[str], timeout_seconds: float = 8
 
 
 def inspect_mitm_certificate_state() -> Dict[str, Any]:
-    cert_path = Path(os.getenv("WECHAT_MITM_CERT_PATH") or (Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.cer"))
+    runtime_settings = get_runtime_settings(reload=True)
+    cert_path = runtime_settings.get("mitm.cert_path")
     result = {
         "cert_path": str(cert_path),
         "exists": cert_path.exists(),
@@ -1961,12 +1915,12 @@ def inspect_mitm_certificate_state() -> Dict[str, Any]:
 
 
 def inspect_capture_proxy_listener_state() -> Dict[str, Any]:
+    runtime_settings = get_runtime_settings(reload=True)
     host, port = get_capture_proxy_endpoint()
-    mitmdump_path = Path(os.getenv("WECHAT_MITM_DUMP_PATH") or (BASE_DIR / ".venv-mitm" / "Scripts" / "mitmdump.exe"))
+    mitmdump_path = runtime_settings.get("mitm.dump_path")
     result_path = Path(
         getattr(collector, "mitm_result_path", None)
-        or os.getenv("WECHAT_CV_MITM_RESULT_PATH")
-        or (BASE_DIR / "logs" / "mitm_openid_result.txt")
+        or runtime_settings.get("mitm.output_path")
     )
     return {
         "host": host,

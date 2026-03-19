@@ -16,6 +16,8 @@ from typing import Callable, Iterable, List, Optional
 
 import uiautomation as auto
 
+from runtime_config import get_runtime_settings
+
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_PATH = BASE_DIR / "logs" / "latest_openid.json"
 DEFAULT_LOG_PATH = BASE_DIR / "logs" / "wechat_openid_collector.log"
@@ -421,6 +423,7 @@ class WeChatOpenIdCollector:
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+    runtime_settings = get_runtime_settings(reload=True)
     parser = argparse.ArgumentParser(
         description="Use uiautomation to open WeChat -> 微助教服务号 -> 学生 -> 全部 and extract openid.",
     )
@@ -428,15 +431,37 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--method",
         choices=["uiautomation", "cv"],
-        default=os.getenv("WECHAT_OPENID_METHOD", "uiautomation"),
+        default=runtime_settings.get("openid.method"),
         help="choose how to collect openid: uiautomation or cv (template click + mitmproxy)",
     )
     parser.add_argument("--interval-hours", type=float, default=2.0, help="repeat interval in hours, default: 2")
-    parser.add_argument("--session-name", default="微助教服务号", help="visible WeChat chat/session name in the left sidebar")
-    parser.add_argument("--menu-button", default="学生", help="bottom menu button prefix, default: 学生")
-    parser.add_argument("--menu-item", default="全部", help="menu item prefix after clicking the bottom button, default: 全部")
-    parser.add_argument("--control-timeout", type=float, default=10.0, help="timeout for control lookup/click flow")
-    parser.add_argument("--browser-timeout", type=float, default=15.0, help="timeout for browser page/url loading")
+    parser.add_argument(
+        "--session-name",
+        default=runtime_settings.get("wechat.session_name"),
+        help="visible WeChat chat/session name in the left sidebar",
+    )
+    parser.add_argument(
+        "--menu-button",
+        default=runtime_settings.get("wechat.menu_button"),
+        help="bottom menu button prefix, default: 学生",
+    )
+    parser.add_argument(
+        "--menu-item",
+        default=runtime_settings.get("wechat.menu_item"),
+        help="menu item prefix after clicking the bottom button, default: 全部",
+    )
+    parser.add_argument(
+        "--control-timeout",
+        type=float,
+        default=runtime_settings.get("wechat.control_timeout_seconds"),
+        help="timeout for control lookup/click flow",
+    )
+    parser.add_argument(
+        "--browser-timeout",
+        type=float,
+        default=runtime_settings.get("wechat.browser_timeout_seconds"),
+        help="timeout for browser page/url loading",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH, help="where to save the latest openid json")
     parser.add_argument("--log-file", type=Path, default=DEFAULT_LOG_PATH, help="collector log path")
     return parser.parse_args(list(argv) if argv is not None else None)

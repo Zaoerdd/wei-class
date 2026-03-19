@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
+from runtime_config import get_runtime_settings
 from wechat_openid_collector import CollectorConfig, OpenIdCollectorError, WeChatOpenIdCollector
 
 SUPPORTED_OPENID_METHODS = ("uiautomation", "cv")
@@ -131,40 +132,31 @@ class CVWeChatOpenIdCollector:
         self.config = config
         self.logger = logger
         self.base_dir = Path(__file__).resolve().parent
-        self.template_dir = Path(os.getenv("WECHAT_CV_TEMPLATE_DIR", self.base_dir / "cv_templates"))
-        self.template_override_dir = Path(
-            os.getenv("WECHAT_CV_TEMPLATE_OVERRIDE_DIR", self.base_dir / "cv_templates_local")
-        )
-        self.match_confidence = float(os.getenv("WECHAT_CV_MATCH_THRESHOLD", "0.82"))
-        self.template_scales = self._read_float_list_env(
-            "WECHAT_CV_TEMPLATE_SCALES",
-            [1.0, 1.25, 1.5, 1.75, 2.0],
-        )
-        self.click_delay = float(os.getenv("WECHAT_CV_CLICK_DELAY", "0.8"))
-        self.session_ready_timeout = float(os.getenv("WECHAT_CV_SESSION_READY_TIMEOUT", "6.0"))
-        self.menu_popup_timeout = float(os.getenv("WECHAT_CV_MENU_POPUP_TIMEOUT", "3.0"))
-        self.browser_delay = float(os.getenv("WECHAT_CV_BROWSER_DELAY", "3.0"))
-        self.capture_timeout = float(
-            os.getenv("WECHAT_CV_MITM_TIMEOUT", str(max(15.0, self.config.browser_timeout_seconds)))
-        )
-        self.poll_interval = float(os.getenv("WECHAT_CV_MITM_POLL_INTERVAL", "0.4"))
-        self.close_timeout = float(os.getenv("WECHAT_CV_CLOSE_TIMEOUT", "6.0"))
-        self.close_poll_interval = float(os.getenv("WECHAT_CV_CLOSE_POLL_INTERVAL", "0.4"))
-        self.capture_proxy_host = os.getenv("WECHAT_CV_PROXY_HOST", "127.0.0.1").strip() or "127.0.0.1"
-        self.capture_proxy_port = int(os.getenv("WECHAT_CV_PROXY_PORT", "8080"))
-        self.capture_proxy_connect_timeout = float(os.getenv("WECHAT_CV_PROXY_CONNECT_TIMEOUT", "2.0"))
-        self.auto_switch_system_proxy = self._read_bool_env("WECHAT_CV_AUTO_SWITCH_SYSTEM_PROXY", True)
-        self.mitm_result_path = Path(
-            os.getenv("WECHAT_CV_MITM_RESULT_PATH", self.base_dir / "logs" / "mitm_openid_result.txt")
-        )
-        self.window_title_contains = os.getenv("WECHAT_CV_WINDOW_TITLE", "微信").strip() or "微信"
-        raw_classes = os.getenv("WECHAT_CV_WINDOW_CLASSES", "WeChatMainWndForPC,Qt51514QWindowIcon")
-        self.window_classes = [item.strip() for item in raw_classes.split(",") if item.strip()]
+        self.runtime_settings = get_runtime_settings(reload=True)
+        self.template_dir = self.runtime_settings.get("cv.template_dir")
+        self.template_override_dir = self.runtime_settings.get("cv.template_override_dir")
+        self.match_confidence = self.runtime_settings.get("cv.match_threshold")
+        self.template_scales = self.runtime_settings.get("cv.template_scales")
+        self.click_delay = self.runtime_settings.get("cv.click_delay")
+        self.session_ready_timeout = self.runtime_settings.get("cv.session_ready_timeout")
+        self.menu_popup_timeout = self.runtime_settings.get("cv.menu_popup_timeout")
+        self.browser_delay = self.runtime_settings.get("cv.browser_delay")
+        self.capture_timeout = self.runtime_settings.get("cv.mitm_timeout", max(15.0, self.config.browser_timeout_seconds))
+        self.poll_interval = self.runtime_settings.get("cv.mitm_poll_interval")
+        self.close_timeout = self.runtime_settings.get("cv.close_timeout")
+        self.close_poll_interval = self.runtime_settings.get("cv.close_poll_interval")
+        self.capture_proxy_host = self.runtime_settings.get("cv.proxy_host")
+        self.capture_proxy_port = self.runtime_settings.get("cv.proxy_port")
+        self.capture_proxy_connect_timeout = self.runtime_settings.get("cv.proxy_connect_timeout")
+        self.auto_switch_system_proxy = self.runtime_settings.get("cv.auto_switch_system_proxy")
+        self.mitm_result_path = self.runtime_settings.get("mitm.output_path")
+        self.window_title_contains = self.runtime_settings.get("cv.window_title")
+        self.window_classes = self.runtime_settings.get("cv.window_classes")
         self.template_names: Dict[str, str] = {
-            "session": os.getenv("WECHAT_CV_SESSION_TEMPLATE", "session.png"),
-            "menu_button": os.getenv("WECHAT_CV_MENU_BUTTON_TEMPLATE", "student_button.png"),
-            "menu_item": os.getenv("WECHAT_CV_MENU_ITEM_TEMPLATE", "all_item.png"),
-            "close": os.getenv("WECHAT_CV_CLOSE_TEMPLATE", "close_button.png"),
+            "session": self.runtime_settings.get("cv.templates.session"),
+            "menu_button": self.runtime_settings.get("cv.templates.menu_button"),
+            "menu_item": self.runtime_settings.get("cv.templates.menu_item"),
+            "close": self.runtime_settings.get("cv.templates.close"),
         }
         self.relative_regions: Dict[str, Tuple[float, float, float, float]] = {
             "session": (0.00, 0.00, 0.38, 1.00),
@@ -568,25 +560,6 @@ class CVWeChatOpenIdCollector:
         cleaned = str(value).strip()
         return cleaned or None
 
-    def _read_bool_env(self, name: str, default: bool) -> bool:
-        raw = os.getenv(name)
-        if raw is None:
-            return default
-        return raw.strip().lower() not in {"0", "false", "no", "off"}
-
-    def _read_float_list_env(self, name: str, default: List[float]) -> List[float]:
-        raw = os.getenv(name)
-        if raw is None:
-            return default
-
-        values: List[float] = []
-        for part in raw.split(","):
-            stripped = part.strip()
-            if not stripped:
-                continue
-            values.append(float(stripped))
-        return values or default
-
     def wait_for_template(
         self,
         role: str,
@@ -754,9 +727,16 @@ class CVWeChatOpenIdCollector:
 
     def _build_region(self, role: str, window_rect: Optional[WindowRect]) -> Optional[Tuple[int, int, int, int]]:
         env_name = f"WECHAT_CV_{role.upper()}_REGION"
-        override = os.getenv(env_name)
+        override = self.runtime_settings.resolve_value(
+            env_names=[env_name],
+            config_paths=[["cv", "regions", role]],
+            default=None,
+        )
         if override:
-            parts = [part.strip() for part in override.split(",")]
+            if isinstance(override, (list, tuple)):
+                parts = [str(part).strip() for part in override]
+            else:
+                parts = [part.strip() for part in str(override).split(",")]
             if len(parts) != 4:
                 raise OpenIdCollectorError(f"invalid region format for {env_name}, expected x,y,width,height")
             return tuple(int(part) for part in parts)  # type: ignore[return-value]
