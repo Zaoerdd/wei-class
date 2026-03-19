@@ -181,7 +181,7 @@ P3-* -> P4-01
 
 ### P1-02 自动生成 `local_config.json`
 
-- 状态：`todo`
+- 状态：`review`
 - 目标：第一次运行自动生成可编辑的本地配置文件
 - 主要工作：
   - 启动时检测 `local_config.json`

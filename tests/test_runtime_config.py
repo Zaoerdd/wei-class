@@ -7,6 +7,61 @@ from runtime_config import RuntimeSettings
 
 
 class RuntimeSettingsTests(unittest.TestCase):
+    def test_missing_local_config_is_created_from_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            config_path = temp_root / "local_config.json"
+            template_path = temp_root / "local_config.example.json"
+            template_text = '{\n  "pushplus": {\n    "token": "from-template"\n  }\n}\n'
+            template_path.write_text(template_text, encoding="utf-8")
+
+            settings = RuntimeSettings(
+                config_path=config_path,
+                template_path=template_path,
+                env={},
+            )
+
+            self.assertTrue(config_path.exists())
+            self.assertTrue(settings.generated_local_config)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), template_text)
+            self.assertEqual(settings.get("pushplus.token"), "from-template")
+
+    def test_existing_local_config_is_not_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            config_path = temp_root / "local_config.json"
+            template_path = temp_root / "local_config.example.json"
+            config_path.write_text('{"pushplus":{"token":"existing"}}\n', encoding="utf-8")
+            template_path.write_text('{"pushplus":{"token":"template"}}\n', encoding="utf-8")
+
+            settings = RuntimeSettings(
+                config_path=config_path,
+                template_path=template_path,
+                env={},
+            )
+
+            self.assertFalse(settings.generated_local_config)
+            self.assertEqual(settings.get("pushplus.token"), "existing")
+            self.assertIn("existing", config_path.read_text(encoding="utf-8"))
+
+    def test_invalid_template_falls_back_to_builtin_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            config_path = temp_root / "local_config.json"
+            template_path = temp_root / "local_config.example.json"
+            template_path.write_text("{ invalid json }\n", encoding="utf-8")
+
+            settings = RuntimeSettings(
+                config_path=config_path,
+                template_path=template_path,
+                env={},
+            )
+
+            self.assertTrue(settings.generated_local_config)
+            generated = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(generated["wechat"]["openid_method"], "uiautomation")
+            self.assertIn("cv", generated)
+
     def test_environment_overrides_local_config_and_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "local_config.json"

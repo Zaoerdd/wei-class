@@ -12,7 +12,39 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 LOCAL_CONFIG_PATH = BASE_DIR / "local_config.json"
+LOCAL_CONFIG_TEMPLATE_PATH = BASE_DIR / "local_config.example.json"
 _UNSET = object()
+
+DEFAULT_LOCAL_CONFIG_TEMPLATE = {
+    "wechat": {
+        "openid_method": "uiautomation",
+        "session_name": "微助教服务号",
+        "menu_button": "学生",
+        "menu_item": "全部",
+        "control_timeout_seconds": 10,
+        "browser_timeout_seconds": 15,
+    },
+    "pushplus": {
+        "token": "",
+        "topic": "",
+    },
+    "cv": {
+        "template_override_dir": "cv_templates_local",
+        "match_threshold": 0.82,
+        "template_scales": [1.0, 1.25, 1.5, 1.75, 2.0],
+        "auto_switch_system_proxy": True,
+        "templates": {
+            "session": "session.png",
+            "menu_button": "student_button.png",
+            "menu_item": "all_item.png",
+            "close": "close_button.png",
+        },
+    },
+    "mitmproxy": {
+        "output_path": "logs/mitm_openid_result.txt",
+        "target_domain": "v18.teachermate.cn",
+    },
+}
 
 
 def _parse_text(value: Any) -> Optional[str]:
@@ -94,6 +126,48 @@ def load_local_config(config_path: Path) -> Dict[str, Any]:
         return {}
 
     return payload
+
+
+def render_default_local_config_template() -> str:
+    return json.dumps(DEFAULT_LOCAL_CONFIG_TEMPLATE, ensure_ascii=False, indent=2) + "\n"
+
+
+def ensure_local_config_exists(
+    config_path: Path,
+    template_path: Path = LOCAL_CONFIG_TEMPLATE_PATH,
+) -> bool:
+    if config_path.exists():
+        return False
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        template_text = template_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        template_text = render_default_local_config_template()
+    except Exception as exc:
+        logger.warning("读取本地配置模板失败 %s: %s", template_path, exc)
+        template_text = render_default_local_config_template()
+
+    if not template_text.strip():
+        template_text = render_default_local_config_template()
+    else:
+        try:
+            payload = json.loads(template_text)
+        except Exception as exc:
+            logger.warning("本地配置模板格式无效，改用内置模板 %s: %s", template_path, exc)
+            template_text = render_default_local_config_template()
+        else:
+            if not isinstance(payload, dict):
+                logger.warning("本地配置模板不是 JSON 对象，改用内置模板: %s", template_path)
+                template_text = render_default_local_config_template()
+
+    if not template_text.endswith("\n"):
+        template_text += "\n"
+
+    config_path.write_text(template_text, encoding="utf-8")
+    logger.info("已自动生成本地配置文件: %s", config_path)
+    return True
 
 
 def _setting(
@@ -358,15 +432,19 @@ class RuntimeSettings:
     def __init__(
         self,
         config_path: Path = LOCAL_CONFIG_PATH,
+        template_path: Path = LOCAL_CONFIG_TEMPLATE_PATH,
         env: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.config_path = Path(config_path)
+        self.template_path = Path(template_path)
         self._env = env if env is not None else os.environ
         self.local_config: Dict[str, Any] = {}
         self._cache: Dict[str, Any] = {}
+        self.generated_local_config = False
         self.reload()
 
     def reload(self) -> None:
+        self.generated_local_config = ensure_local_config_exists(self.config_path, self.template_path)
         self.local_config = load_local_config(self.config_path)
         self._cache.clear()
 
@@ -457,11 +535,13 @@ class RuntimeSettings:
             return raw_value
         return parser(raw_value)
 
-
-DEFAULT_RUNTIME_SETTINGS = RuntimeSettings()
+DEFAULT_RUNTIME_SETTINGS: Optional[RuntimeSettings] = None
 
 
 def get_runtime_settings(*, reload: bool = False) -> RuntimeSettings:
-    if reload:
+    global DEFAULT_RUNTIME_SETTINGS
+    if DEFAULT_RUNTIME_SETTINGS is None:
+        DEFAULT_RUNTIME_SETTINGS = RuntimeSettings()
+    elif reload:
         DEFAULT_RUNTIME_SETTINGS.reload()
     return DEFAULT_RUNTIME_SETTINGS
