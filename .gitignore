@@ -33,6 +33,7 @@ htmlcov/
 .env
 .env.*
 .python-version
+local_config.json
 
 # Flask/runtime local data
 instance/

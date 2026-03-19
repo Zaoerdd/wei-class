@@ -16,6 +16,23 @@
 - 自动获取 OpenID 失败时，可以直接在页面里粘贴 OpenID 或完整链接
 - 需要结束服务时，双击 `停止服务.bat`
 
+## PushPlus 本地配置
+
+如果你想启用二维码推送，不需要每次手动设置环境变量，直接编辑仓库根目录里的 `local_config.json`：
+
+```json
+{
+  "pushplus": {
+    "token": "你的PushPlusToken",
+    "topic": "你的群组编码"
+  }
+}
+```
+
+- `token` 必填
+- `topic` 可选，不填就推送到默认渠道
+- 环境变量仍然可用，并且优先级高于 `local_config.json`
+
 ## 环境要求
 
 - Windows

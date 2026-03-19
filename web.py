@@ -41,6 +41,7 @@ BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 FAYE_LOG_PATH = LOG_DIR / "faye_history.log"
 OPENID_CACHE_PATH = BASE_DIR / "logs" / "latest_openid.json"
+LOCAL_CONFIG_PATH = BASE_DIR / "local_config.json"
 OPENID_HEX_RE = re.compile(r"^[a-fA-F0-9]{32}$")
 OPENID_INVALID_MESSAGE_KEYWORDS = (
     "登录信息失效",
@@ -52,6 +53,56 @@ OPENID_INVALID_MESSAGE_KEYWORDS = (
     "login expired",
     "unauthorized",
 )
+
+
+def load_local_config(config_path: Path) -> Dict[str, Any]:
+    if not config_path.exists():
+        return {}
+
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("加载本地配置文件失败 %s: %s", config_path, exc)
+        return {}
+
+    if not isinstance(payload, dict):
+        logger.warning("本地配置文件格式无效，应为 JSON 对象: %s", config_path)
+        return {}
+
+    return payload
+
+
+LOCAL_CONFIG = load_local_config(LOCAL_CONFIG_PATH)
+
+
+def get_local_config_value(*keys: str, default: Optional[Any] = None) -> Optional[Any]:
+    current: Any = LOCAL_CONFIG
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return current
+
+
+def get_runtime_setting(
+    env_name: str,
+    *config_keys: str,
+    default: Optional[str] = None,
+) -> Optional[str]:
+    env_value = os.getenv(env_name)
+    if env_value is not None:
+        stripped = str(env_value).strip()
+        if stripped:
+            return stripped
+
+    if config_keys:
+        config_value = get_local_config_value(*config_keys)
+        if config_value is not None:
+            stripped = str(config_value).strip()
+            if stripped:
+                return stripped
+
+    return default
 
 
 def _build_faye_file_logger() -> logging.Logger:
@@ -1165,8 +1216,8 @@ collector_config = CollectorConfig(
     log_path=COLLECTOR_LOG_PATH,
 )
 pushplus_notifier = PushPlusNotifier(
-    token=os.getenv("PUSHPLUS_TOKEN"),
-    topic=os.getenv("PUSHPLUS_TOPIC"),
+    token=get_runtime_setting("PUSHPLUS_TOKEN", "pushplus", "token"),
+    topic=get_runtime_setting("PUSHPLUS_TOPIC", "pushplus", "topic"),
 )
 collector_method = normalize_openid_method(os.getenv("WECHAT_OPENID_METHOD", "uiautomation"))
 collector = None
