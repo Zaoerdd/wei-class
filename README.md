@@ -11,6 +11,15 @@
 
 当前默认运行方式是启动 `web.py`，服务启动后会立即尝试采集一次 `openid`，之后每 2 小时自动刷新一次。
 
+## 文档导航
+
+- [README.quickstart.md](README.quickstart.md)
+  给第一次部署的用户，优先看这份
+- [README.troubleshooting.md](README.troubleshooting.md)
+  遇到问题时优先看这份
+- [README.md](README.md)
+  保留完整说明、配置项、接口和日志约定
+
 ## 功能概览
 
 - 自动刷新 `openid`
@@ -99,6 +108,8 @@
   签到监听事件日志
 
 ## 一、安装项目依赖
+
+如果你只是想尽快跑起来，建议先看 [README.quickstart.md](README.quickstart.md)。
 
 在项目目录下创建并使用项目虚拟环境：
 
@@ -459,6 +470,8 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 - Faye 相关消息
 
 ## 十、常见问题
+
+如果你正在排查失败场景，建议优先打开 [README.troubleshooting.md](README.troubleshooting.md)。
 
 排查时建议先打开 [http://127.0.0.1:5000/health](http://127.0.0.1:5000/health)。
 
