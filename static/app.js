@@ -92,6 +92,19 @@ function sourceLabel(source) {
     return "等待中";
 }
 
+function readinessTone(readiness) {
+    if (readiness === "ready") {
+        return "success";
+    }
+    if (readiness === "blocked") {
+        return "danger";
+    }
+    if (readiness === "attention") {
+        return "warning";
+    }
+    return "idle";
+}
+
 function signTypeLabel(item) {
     if (!item) {
         return "等待任务";
@@ -108,6 +121,7 @@ function signTypeLabel(item) {
 function getUiTone(status) {
     const openidStatus = status.openid_status || {};
     const resultMeta = status.result_meta || {};
+    const homeStatus = status.home_status || {};
 
     if (resultMeta.is_error) {
         return {
@@ -142,6 +156,24 @@ function getUiTone(status) {
             pill: "处理中",
             title: `检测到 ${status.active_sign_count} 个签到任务`,
             description: "系统正在自动处理当前任务，请保持页面打开。",
+        };
+    }
+
+    if (homeStatus.readiness === "blocked") {
+        return {
+            tone: "danger",
+            pill: "待修复",
+            title: safeText(homeStatus.title, "当前自动化链路有阻塞"),
+            description: safeText(homeStatus.description, "请先处理当前运行阻塞项。"),
+        };
+    }
+
+    if (homeStatus.readiness === "attention") {
+        return {
+            tone: openidStatus.is_refreshing ? "running" : "warning",
+            pill: openidStatus.is_refreshing ? "准备中" : "需关注",
+            title: safeText(homeStatus.title, "还有运行状态需要关注"),
+            description: safeText(homeStatus.description, "建议先看首页状态卡或环境体检页。"),
         };
     }
 
@@ -184,12 +216,19 @@ function renderBanner(status) {
     const banner = $("notice-banner");
     const openidStatus = status.openid_status || {};
     const resultMeta = status.result_meta || {};
+    const homeStatus = status.home_status || {};
     let message = "";
     let toneClass = "";
 
     if (resultMeta.is_error) {
         message = safeText(resultMeta.frontend_message, "当前任务处理失败，请检查微信状态或重新刷新。");
         toneClass = "notice-banner--danger";
+    } else if (homeStatus.readiness === "blocked") {
+        message = safeText(homeStatus.next_action, "当前还不能稳定使用，建议先打开环境体检页。");
+        toneClass = "notice-banner--danger";
+    } else if (openidStatus.used_file_fallback) {
+        message = "当前正在使用缓存 OpenID 回退，能用但建议尽快恢复自动采集。";
+        toneClass = "notice-banner--warning";
     } else if (openidStatus.last_error) {
         message = "自动获取 OpenID 失败，建议检查微信窗口或使用页面下方的手动输入。";
         toneClass = "notice-banner--warning";
@@ -219,6 +258,45 @@ function renderHero(status) {
     $("collector-method").textContent = collectorLabel(openidStatus.collector_method);
     $("openid-source").textContent = sourceLabel(openidStatus.current_source);
     $("refresh-time").textContent = formatTime(openidStatus.last_refresh_at);
+}
+
+function renderStatusGlance(status) {
+    const openidStatus = status.openid_status || {};
+    const homeStatus = status.home_status || {};
+    const mitm = homeStatus.mitm || {};
+    const readinessToneClass = readinessTone(homeStatus.readiness);
+    const readinessCard = $("readiness-summary")?.closest(".status-glance-card");
+    const mitmCard = $("mitm-summary")?.closest(".status-glance-card");
+
+    if (readinessCard) {
+        readinessCard.className = `status-glance-card status-glance-card--primary status-glance-card--${readinessToneClass}`;
+    }
+    if (mitmCard) {
+        mitmCard.className = `status-glance-card status-glance-card--${readinessTone(mitm.status === "pass" ? "ready" : mitm.status === "fail" ? "blocked" : mitm.status === "warn" ? "attention" : "")}`;
+    }
+
+    $("readiness-summary").textContent = safeText(homeStatus.title, "等待状态刷新");
+    $("readiness-note").textContent = safeText(homeStatus.description, "这里会直接告诉你现在能不能用，以及为什么。");
+    $("readiness-action").textContent = safeText(homeStatus.next_action, "等待状态刷新");
+
+    $("refresh-summary").textContent = formatTime(openidStatus.last_refresh_at);
+    $("refresh-note").textContent = openidStatus.next_refresh_at
+        ? `下次计划刷新：${formatTime(openidStatus.next_refresh_at)}`
+        : "还没有确定下一次刷新时间。";
+
+    $("collector-summary").textContent = `${collectorLabel(openidStatus.collector_method)} · ${sourceLabel(openidStatus.current_source)}`;
+    $("collector-note").textContent = openidStatus.used_file_fallback
+        ? "当前正在使用缓存回退。虽然能继续监听，但建议尽快恢复自动采集。"
+        : openidStatus.openid
+            ? "当前链路已经拿到有效 OpenID，会继续自动监听。"
+            : "当前还没有拿到可用 OpenID。";
+
+    $("mitm-summary").textContent = mitm.required
+        ? safeText(mitm.summary, "等待 mitm 状态")
+        : "当前模式不需要";
+    $("mitm-note").textContent = mitm.required
+        ? `${safeText(mitm.detail, "等待 mitm 状态")} ${mitm.endpoint ? `监听地址：${mitm.endpoint}` : ""}`.trim()
+        : safeText(mitm.detail, "旧版微信模式不会依赖 mitmproxy。");
 }
 
 function renderOverview(status) {
@@ -478,17 +556,24 @@ function renderResult(status) {
 function renderRuntime(status) {
     const openidStatus = status.openid_status || {};
     const resultMeta = status.result_meta || {};
+    const homeStatus = status.home_status || {};
+    const mitm = homeStatus.mitm || {};
     const details = [
+        ["当前可用性", safeText(homeStatus.title, "等待状态刷新")],
         ["当前 OpenID", openidStatus.openid_masked || "未获取"],
         ["来源", sourceLabel(openidStatus.current_source)],
         ["获取方式", collectorLabel(openidStatus.collector_method)],
         ["上次刷新", formatTime(openidStatus.last_refresh_at)],
         ["下次刷新", formatTime(openidStatus.next_refresh_at)],
         ["缓存回退", openidStatus.used_file_fallback ? "是" : "否"],
+        ["mitm 状态", mitm.required ? safeText(mitm.summary, "等待中") : "当前模式不需要"],
         ["当前链接", truncate(openidStatus.current_url || "", 72)],
         ["结果消息", safeText(resultMeta.frontend_message || status.message, "等待结果")],
     ];
 
+    if (homeStatus.next_action) {
+        details.push(["下一步建议", safeText(homeStatus.next_action, "按当前状态继续操作即可")]);
+    }
     if (openidStatus.last_error) {
         details.push(["最近错误", safeText(openidStatus.last_error, "请检查微信窗口或改用手动输入")]);
     }
@@ -541,6 +626,7 @@ function renderStatus(status) {
     state.lastStatus = status;
     renderBanner(status);
     renderHero(status);
+    renderStatusGlance(status);
     renderOverview(status);
     renderTimeline(status);
     renderActiveSigns(status);

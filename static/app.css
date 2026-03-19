@@ -342,9 +342,57 @@ a {
     margin-top: 18px;
 }
 
+.status-glance-grid {
+    display: grid;
+    grid-template-columns: 1.25fr repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 18px;
+}
+
 .overview-card {
     padding: 18px 18px 20px;
     border-radius: 24px;
+}
+
+.status-glance-card {
+    padding: 18px 18px 20px;
+    border-radius: 24px;
+    backdrop-filter: blur(14px);
+    background: var(--surface);
+    border: 1px solid var(--surface-border);
+    box-shadow: var(--shadow-md);
+}
+
+.status-glance-card--primary {
+    background:
+        radial-gradient(circle at top right, rgba(15, 118, 110, 0.12), transparent 35%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.82));
+}
+
+.status-glance-card--success {
+    border-color: rgba(15, 118, 110, 0.24);
+    box-shadow: 0 16px 36px rgba(15, 118, 110, 0.10);
+}
+
+.status-glance-card--warning {
+    border-color: rgba(245, 158, 11, 0.24);
+    box-shadow: 0 16px 36px rgba(245, 158, 11, 0.09);
+}
+
+.status-glance-card--danger {
+    border-color: rgba(194, 65, 12, 0.24);
+    box-shadow: 0 16px 36px rgba(194, 65, 12, 0.09);
+}
+
+.status-glance-action {
+    margin: 14px 0 0;
+    padding: 10px 12px;
+    border-radius: 16px;
+    background: rgba(20, 33, 61, 0.06);
+    color: var(--text);
+    font-size: 0.92rem;
+    font-weight: 700;
+    line-height: 1.6;
 }
 
 .overview-label {
@@ -850,6 +898,7 @@ a {
     .content-grid,
     .guide-grid,
     .health-check-grid,
+    .status-glance-grid,
     .overview-grid,
     .timeline {
         grid-template-columns: 1fr;
