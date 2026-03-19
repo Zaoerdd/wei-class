@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import html
+import io
 import json
 import logging
 import os
@@ -14,13 +15,14 @@ import threading
 import time
 import sys
 import winreg
+import zipfile
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
-from flask import Flask, jsonify, make_response, render_template, request
+from flask import Flask, jsonify, make_response, render_template, request, send_file
 
 import ad
 from getSocket import TeacherMateWebSocketClient
@@ -57,6 +59,30 @@ OPENID_INVALID_MESSAGE_KEYWORDS = (
     "login expired",
     "unauthorized",
 )
+HEX32_TEXT_RE = re.compile(r"(?<![a-fA-F0-9])[a-fA-F0-9]{32}(?![a-fA-F0-9])")
+OPENID_QUERY_RE = re.compile(r"(?i)(openid=)([a-fA-F0-9]{32})")
+SUPPORT_BUNDLE_SCHEMA_VERSION = 1
+SUPPORT_BUNDLE_MAX_TEXT_BYTES = 128 * 1024
+SUPPORT_BUNDLE_ENV_KEYS = {
+    "ALL_PROXY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+}
+SENSITIVE_STRUCTURED_KEYS = {
+    "accesstoken",
+    "authorization",
+    "cookie",
+    "cookies",
+    "manualopenid",
+    "openid",
+    "password",
+    "pushplustoken",
+    "refreshtoken",
+    "secret",
+    "token",
+    "useropenid",
+}
 
 
 def load_local_config(config_path: Path) -> Dict[str, Any]:
@@ -142,6 +168,199 @@ def mask_openid(openid: Optional[str]) -> Optional[str]:
     if len(openid) <= 10:
         return openid
     return f"{openid[:6]}***{openid[-4:]}"
+
+
+def normalize_sensitive_key(key: Optional[str]) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(key or "").lower())
+
+
+def redact_secret_token(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "[redacted]"
+    if len(text) <= 8:
+        return "[redacted]"
+    return f"{text[:2]}***{text[-2:]}"
+
+
+def redact_sensitive_text(value: str) -> str:
+    redacted = OPENID_QUERY_RE.sub(lambda match: f"{match.group(1)}{mask_openid(match.group(2)) or '[redacted]'}", value)
+    return HEX32_TEXT_RE.sub(lambda match: mask_openid(match.group(0)) or "[redacted]", redacted)
+
+
+def redact_sensitive_value(value: Any, key: Optional[str] = None) -> Any:
+    if isinstance(value, dict):
+        return {item_key: redact_sensitive_value(item_value, item_key) for item_key, item_value in value.items()}
+
+    if isinstance(value, list):
+        return [redact_sensitive_value(item, key) for item in value]
+
+    if value in (None, "", False):
+        return value
+
+    normalized_key = normalize_sensitive_key(key)
+    if normalized_key.endswith("masked"):
+        return value
+
+    if isinstance(value, str):
+        if "openid" in normalized_key:
+            return mask_openid(value) or "[redacted]"
+        if normalized_key in SENSITIVE_STRUCTURED_KEYS:
+            return redact_secret_token(value)
+        return redact_sensitive_text(value)
+
+    if normalized_key in SENSITIVE_STRUCTURED_KEYS:
+        return "[redacted]"
+
+    return value
+
+
+def read_text_tail(path: Path, max_bytes: int = SUPPORT_BUNDLE_MAX_TEXT_BYTES) -> str:
+    data = path.read_bytes()
+    if len(data) > max_bytes:
+        data = data[-max_bytes:]
+    return data.decode("utf-8", errors="replace")
+
+
+def build_support_runtime_snapshot(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    openid_status = runtime_state.get("openid_status") or {}
+    pipeline_status = runtime_state.get("pipeline_status") or {}
+    summary = runtime_state.get("summary") or {}
+    current_sign = get_runtime_current_sign(pipeline_status)
+    sign_snapshot = None
+    if isinstance(current_sign, dict):
+        sign_snapshot = {
+            "name": current_sign.get("name"),
+            "courseId": current_sign.get("courseId"),
+            "signId": current_sign.get("signId"),
+            "signType": current_sign.get("signType"),
+            "startTime": current_sign.get("startTime"),
+        }
+
+    return redact_sensitive_value(
+        {
+            "schema_version": runtime_state.get("schema_version"),
+            "generated_at": runtime_state.get("generated_at"),
+            "summary": summary,
+            "openid_status": {
+                "collector_method": openid_status.get("collector_method"),
+                "current_source": openid_status.get("current_source"),
+                "openid": openid_status.get("openid"),
+                "openid_masked": openid_status.get("openid_masked"),
+                "used_file_fallback": openid_status.get("used_file_fallback"),
+                "is_refreshing": openid_status.get("is_refreshing"),
+                "last_refresh_at": openid_status.get("last_refresh_at"),
+                "next_refresh_at": openid_status.get("next_refresh_at"),
+                "last_error": openid_status.get("last_error"),
+            },
+            "pipeline_status": {
+                "has_pipeline": pipeline_status.get("has_pipeline"),
+                "is_running": pipeline_status.get("is_running"),
+                "message": pipeline_status.get("message"),
+                "success": pipeline_status.get("success"),
+                "active_sign_count": pipeline_status.get("active_sign_count"),
+                "result_meta": pipeline_status.get("result_meta"),
+                "current_sign": sign_snapshot,
+            },
+            "home_status": build_frontend_home_status(runtime_state),
+        }
+    )
+
+
+def build_template_snapshot() -> Dict[str, Any]:
+    template_dir = Path(getattr(collector, "template_dir", BASE_DIR / "cv_templates"))
+    override_dir = Path(getattr(collector, "template_override_dir", BASE_DIR / "cv_templates_local"))
+    template_names = dict(
+        getattr(
+            collector,
+            "template_names",
+            {
+                "session": "session.png",
+                "menu_button": "student_button.png",
+                "menu_item": "all_item.png",
+                "close": "close_button.png",
+            },
+        )
+    )
+
+    items: List[Dict[str, Any]] = []
+    for role, filename in sorted(template_names.items()):
+        override_path = override_dir / filename
+        default_path = template_dir / filename
+        resolved_path = None
+        source = "missing"
+        exists = False
+
+        if override_path.exists():
+            resolved_path = override_path
+            source = "override"
+            exists = True
+        elif default_path.exists():
+            resolved_path = default_path
+            source = "default"
+            exists = True
+
+        items.append(
+            {
+                "role": role,
+                "filename": filename,
+                "source": source,
+                "exists": exists,
+                "default_path": str(default_path),
+                "override_path": str(override_path),
+                "resolved_path": str(resolved_path) if resolved_path else None,
+                "file_size": resolved_path.stat().st_size if resolved_path and resolved_path.exists() else None,
+            }
+        )
+
+    return {
+        "template_dir": str(template_dir),
+        "template_override_dir": str(override_dir),
+        "templates": items,
+    }
+
+
+def build_environment_snapshot() -> Dict[str, Any]:
+    tracked_env = {}
+    for key in sorted(os.environ):
+        if key.startswith("WECHAT_") or key.startswith("PUSHPLUS_") or key in SUPPORT_BUNDLE_ENV_KEYS:
+            tracked_env[key] = redact_sensitive_value(os.environ.get(key), key)
+
+    return {
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "base_dir": str(BASE_DIR),
+        "python_executable": sys.executable,
+        "python_version": sys.version,
+        "platform": sys.platform,
+        "local_config_path": str(LOCAL_CONFIG_PATH),
+        "collector_method": getattr(collector, "method_name", "unknown"),
+        "environment": tracked_env,
+    }
+
+
+def build_local_config_snapshot() -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "path": str(LOCAL_CONFIG_PATH),
+        "exists": LOCAL_CONFIG_PATH.exists(),
+    }
+    if not LOCAL_CONFIG_PATH.exists():
+        return payload
+
+    try:
+        payload["content"] = redact_sensitive_value(json.loads(LOCAL_CONFIG_PATH.read_text(encoding="utf-8")))
+    except Exception as exc:
+        payload["read_error"] = str(exc)
+        payload["raw_preview"] = redact_sensitive_text(read_text_tail(LOCAL_CONFIG_PATH, max_bytes=16 * 1024))
+    return payload
+
+
+def build_support_bundle_health_report(
+    runtime_state: Dict[str, Any],
+    listener_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    report = build_health_report(runtime_state=runtime_state, listener_state=listener_state)
+    report["runtime_state"] = build_support_runtime_snapshot(runtime_state)
+    return redact_sensitive_value(report)
 
 
 def get_sign_type(item: Dict[str, Any]) -> str:
@@ -2217,9 +2436,12 @@ def summarize_health_checks(checks: List[Dict[str, Any]], runtime_state: Dict[st
     }
 
 
-def build_health_report() -> Dict[str, Any]:
-    runtime_state = build_runtime_state()
-    listener_state = inspect_capture_proxy_listener_state()
+def build_health_report(
+    runtime_state: Optional[Dict[str, Any]] = None,
+    listener_state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    runtime_state = runtime_state or build_runtime_state()
+    listener_state = listener_state or inspect_capture_proxy_listener_state()
     checks = [
         build_runtime_health_check(runtime_state),
         build_python_environment_health_check(),
@@ -2237,6 +2459,169 @@ def build_health_report() -> Dict[str, Any]:
         "summary": summarize_health_checks(checks, runtime_state),
         "checks": checks,
     }
+
+
+def json_dumps_pretty(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+def append_bundle_json(
+    archive: zipfile.ZipFile,
+    manifest_entries: List[Dict[str, Any]],
+    bundle_path: str,
+    payload: Any,
+    *,
+    source_path: Optional[Path] = None,
+) -> None:
+    data = json_dumps_pretty(payload).encode("utf-8")
+    archive.writestr(bundle_path, data)
+    manifest_entries.append(
+        {
+            "bundle_path": bundle_path,
+            "kind": "json",
+            "size_bytes": len(data),
+            "source_path": str(source_path) if source_path else None,
+        }
+    )
+
+
+def append_bundle_text_file(
+    archive: zipfile.ZipFile,
+    manifest_entries: List[Dict[str, Any]],
+    bundle_path: str,
+    source_path: Path,
+) -> None:
+    entry = {
+        "bundle_path": bundle_path,
+        "kind": "text",
+        "source_path": str(source_path),
+        "exists": source_path.exists(),
+    }
+    if not source_path.exists():
+        manifest_entries.append(entry)
+        return
+
+    try:
+        original_size = source_path.stat().st_size
+        content = redact_sensitive_text(read_text_tail(source_path))
+        data = content.encode("utf-8")
+        archive.writestr(bundle_path, data)
+        entry["size_bytes"] = len(data)
+        entry["truncated"] = original_size > SUPPORT_BUNDLE_MAX_TEXT_BYTES
+    except Exception as exc:
+        entry["error"] = str(exc)
+    manifest_entries.append(entry)
+
+
+def append_bundle_json_file(
+    archive: zipfile.ZipFile,
+    manifest_entries: List[Dict[str, Any]],
+    bundle_path: str,
+    source_path: Path,
+) -> None:
+    entry = {
+        "bundle_path": bundle_path,
+        "kind": "json",
+        "source_path": str(source_path),
+        "exists": source_path.exists(),
+    }
+    if not source_path.exists():
+        manifest_entries.append(entry)
+        return
+
+    try:
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+        data = json_dumps_pretty(redact_sensitive_value(payload)).encode("utf-8")
+        archive.writestr(bundle_path, data)
+        entry["size_bytes"] = len(data)
+    except Exception as exc:
+        entry["error"] = str(exc)
+    manifest_entries.append(entry)
+
+
+def build_support_bundle_archive() -> Tuple[io.BytesIO, str]:
+    runtime_state = build_runtime_state()
+    listener_state = inspect_capture_proxy_listener_state()
+    system_proxy_state = read_system_proxy_settings()
+    mitm_certificate_state = inspect_mitm_certificate_state()
+    support_runtime_state = build_support_runtime_snapshot(runtime_state)
+    support_health_report = build_support_bundle_health_report(runtime_state, listener_state)
+    frontend_status = redact_sensitive_value(build_frontend_status_payload(runtime_state))
+    template_snapshot = build_template_snapshot()
+    environment_snapshot = build_environment_snapshot()
+    local_config_snapshot = build_local_config_snapshot()
+
+    log_entries = [
+        ("logs/collector.log", Path(COLLECTOR_LOG_PATH), "text"),
+        ("logs/faye_history.log", Path(FAYE_LOG_PATH), "text"),
+        ("logs/latest_openid.json", OPENID_CACHE_PATH, "json"),
+        ("logs/collector_output.json", Path(COLLECTOR_OUTPUT_PATH), "json"),
+        ("logs/mitm_openid_result.txt", Path(listener_state["result_path"]), "text"),
+    ]
+
+    buffer = io.BytesIO()
+    manifest_entries: List[Dict[str, Any]] = []
+    generated_at = datetime.now().astimezone()
+
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        append_bundle_json(archive, manifest_entries, "runtime/runtime_state.json", support_runtime_state)
+        append_bundle_json(archive, manifest_entries, "runtime/health_report.json", support_health_report)
+        append_bundle_json(archive, manifest_entries, "runtime/frontend_status.json", frontend_status)
+        append_bundle_json(
+            archive,
+            manifest_entries,
+            "diagnostics/proxy_listener_state.json",
+            redact_sensitive_value(listener_state),
+        )
+        append_bundle_json(
+            archive,
+            manifest_entries,
+            "diagnostics/system_proxy_state.json",
+            redact_sensitive_value(system_proxy_state),
+        )
+        append_bundle_json(
+            archive,
+            manifest_entries,
+            "diagnostics/mitm_certificate_state.json",
+            redact_sensitive_value(mitm_certificate_state),
+        )
+        append_bundle_json(archive, manifest_entries, "collector/template_snapshot.json", template_snapshot)
+        append_bundle_json(archive, manifest_entries, "config/environment_snapshot.json", environment_snapshot)
+        append_bundle_json(
+            archive,
+            manifest_entries,
+            "config/local_config.json",
+            local_config_snapshot,
+            source_path=LOCAL_CONFIG_PATH,
+        )
+
+        for bundle_path, source_path, file_kind in log_entries:
+            if file_kind == "json":
+                append_bundle_json_file(archive, manifest_entries, bundle_path, source_path)
+            else:
+                append_bundle_text_file(archive, manifest_entries, bundle_path, source_path)
+
+        append_bundle_json(
+            archive,
+            manifest_entries,
+            "manifest.json",
+            {
+                "schema_version": SUPPORT_BUNDLE_SCHEMA_VERSION,
+                "generated_at": generated_at.isoformat(),
+                "bundle_name": f"wei-class-support-bundle-{generated_at.strftime('%Y%m%d-%H%M%S')}.zip",
+                "collector_method": runtime_state.get("summary", {}).get("collector_method"),
+                "current_source": runtime_state.get("openid_status", {}).get("current_source"),
+                "notes": [
+                    "日志文件默认只保留末尾 128 KiB，并已对 OpenID 等敏感字段做脱敏。",
+                    "诊断包不包含本机模板图片，只包含模板状态与路径快照。",
+                ],
+                "files": manifest_entries,
+            },
+        )
+
+    buffer.seek(0)
+    filename = f"wei-class-support-bundle-{generated_at.strftime('%Y%m%d-%H%M%S')}.zip"
+    return buffer, filename
 
 
 @app.route("/")
@@ -2306,6 +2691,22 @@ def openid_status():
 def health_status():
     ensure_runtime_initialized()
     return jsonify(build_health_report())
+
+
+@app.route("/api/support_bundle")
+def support_bundle():
+    ensure_runtime_initialized()
+    try:
+        archive, filename = build_support_bundle_archive()
+        return send_file(
+            archive,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=filename,
+        )
+    except Exception as exc:
+        logger.exception("导出诊断包失败: %s", exc)
+        return jsonify({"success": False, "message": f"导出诊断包失败: {exc}"}), 500
 
 
 @app.route("/api/runtime_state")

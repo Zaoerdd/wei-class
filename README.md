@@ -394,11 +394,13 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 常用接口：
 
 - [http://127.0.0.1:5000/health](http://127.0.0.1:5000/health)
-  环境体检页，适合排查部署问题
+  环境体检页，适合排查部署问题，也可以直接在页面里导出诊断包
 - [http://127.0.0.1:5000/api/check_session](http://127.0.0.1:5000/api/check_session)
   查看当前自动会话状态
 - [http://127.0.0.1:5000/api/health](http://127.0.0.1:5000/api/health)
   查看结构化健康检查结果
+- [http://127.0.0.1:5000/api/support_bundle](http://127.0.0.1:5000/api/support_bundle)
+  导出一份脱敏诊断包，适合交给开发者排查
 - [http://127.0.0.1:5000/api/openid_status](http://127.0.0.1:5000/api/openid_status)
   查看 `openid` 刷新状态
 - [http://127.0.0.1:5000/qr_code](http://127.0.0.1:5000/qr_code)
@@ -468,6 +470,20 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 - 根证书是否已经导入
 - `cv` 模板是否缺失
 - `latest_openid.json` 是否可作为回退缓存
+
+如果你准备把问题交给开发者排查，可以直接在体检页点击“导出诊断包”。
+
+诊断包默认会包含：
+
+- 脱敏后的运行状态、首页状态和健康检查 JSON
+- 系统代理、`mitmproxy`、证书和模板状态快照
+- 脱敏后的 `collector.log`、`faye_history.log`、`latest_openid.json` 和抓包结果文件尾部
+
+诊断包默认不会包含：
+
+- 本机模板图片原文件
+- 虚拟环境目录
+- 未脱敏的 `openid`、token 或密码
 
 ### 1. 新版微信模式提示 `capture proxy ... is not reachable`
 
