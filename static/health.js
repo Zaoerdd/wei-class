@@ -278,8 +278,69 @@ async function fetchHealth() {
     }
 }
 
+function parseDownloadFilename(disposition) {
+    if (!disposition) {
+        return "wei-class-support-bundle.zip";
+    }
+
+    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match && utf8Match[1]) {
+        return decodeURIComponent(utf8Match[1]);
+    }
+
+    const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+    if (plainMatch && plainMatch[1]) {
+        return plainMatch[1];
+    }
+
+    return "wei-class-support-bundle.zip";
+}
+
+async function exportSupportBundle() {
+    const button = $("health-export-btn");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "正在导出...";
+
+    try {
+        const response = await fetch("/api/support_bundle", { cache: "no-store" });
+        if (!response.ok) {
+            let message = `HTTP ${response.status}`;
+            try {
+                const payload = await response.json();
+                if (payload && payload.message) {
+                    message = payload.message;
+                }
+            } catch (error) {
+                message = `HTTP ${response.status}`;
+            }
+            throw new Error(message);
+        }
+
+        const blob = await response.blob();
+        const filename = parseDownloadFilename(response.headers.get("Content-Disposition"));
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = downloadUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+        const message = error instanceof Error
+            ? error.message
+            : "导出诊断包失败，请先确认本地服务运行正常。";
+        window.alert(message);
+    } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+    }
+}
+
 function bindEvents() {
     $("health-refresh-btn").addEventListener("click", () => fetchHealth());
+    $("health-export-btn").addEventListener("click", () => exportSupportBundle());
 }
 
 function startPolling() {
