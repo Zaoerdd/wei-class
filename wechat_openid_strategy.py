@@ -11,6 +11,7 @@ import winreg
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 from wechat_openid_collector import CollectorConfig, OpenIdCollectorError, WeChatOpenIdCollector
@@ -23,6 +24,7 @@ HWND_NOTOPMOST = -2
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_SHOWWINDOW = 0x0040
+WM_CLOSE = 0x0010
 
 OPENID_URL_RE = re.compile(r"[?&]openid=([^&#]+)")
 OPENID_JSON_RE = re.compile(r'["\']openid["\']\s*:\s*["\']([^"\']+)["\']', re.IGNORECASE)
@@ -30,10 +32,37 @@ OPENID_HEX_RE = re.compile(r"\b[a-fA-F0-9]{32}\b")
 
 user32 = ctypes.windll.user32
 wininet = ctypes.windll.wininet
+try:
+    shcore = ctypes.windll.shcore
+except AttributeError:
+    shcore = None
 
 INTERNET_OPTION_REFRESH = 37
 INTERNET_OPTION_SETTINGS_CHANGED = 39
 INTERNET_SETTINGS_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+
+
+def enable_high_dpi_awareness() -> None:
+    try:
+        awareness_context = ctypes.c_void_p(-4)
+        result = user32.SetProcessDpiAwarenessContext(awareness_context)
+        if result:
+            return
+    except Exception:
+        pass
+
+    if shcore is not None:
+        try:
+            # PROCESS_PER_MONITOR_DPI_AWARE
+            shcore.SetProcessDpiAwareness(2)
+            return
+        except Exception:
+            pass
+
+    try:
+        user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 
 def normalize_openid_method(method: Optional[str]) -> str:
@@ -103,8 +132,17 @@ class CVWeChatOpenIdCollector:
         self.logger = logger
         self.base_dir = Path(__file__).resolve().parent
         self.template_dir = Path(os.getenv("WECHAT_CV_TEMPLATE_DIR", self.base_dir / "cv_templates"))
+        self.template_override_dir = Path(
+            os.getenv("WECHAT_CV_TEMPLATE_OVERRIDE_DIR", self.base_dir / "cv_templates_local")
+        )
         self.match_confidence = float(os.getenv("WECHAT_CV_MATCH_THRESHOLD", "0.82"))
+        self.template_scales = self._read_float_list_env(
+            "WECHAT_CV_TEMPLATE_SCALES",
+            [1.0, 1.25, 1.5, 1.75, 2.0],
+        )
         self.click_delay = float(os.getenv("WECHAT_CV_CLICK_DELAY", "0.8"))
+        self.session_ready_timeout = float(os.getenv("WECHAT_CV_SESSION_READY_TIMEOUT", "6.0"))
+        self.menu_popup_timeout = float(os.getenv("WECHAT_CV_MENU_POPUP_TIMEOUT", "3.0"))
         self.browser_delay = float(os.getenv("WECHAT_CV_BROWSER_DELAY", "3.0"))
         self.capture_timeout = float(
             os.getenv("WECHAT_CV_MITM_TIMEOUT", str(max(15.0, self.config.browser_timeout_seconds)))
@@ -120,7 +158,7 @@ class CVWeChatOpenIdCollector:
             os.getenv("WECHAT_CV_MITM_RESULT_PATH", self.base_dir / "logs" / "mitm_openid_result.txt")
         )
         self.window_title_contains = os.getenv("WECHAT_CV_WINDOW_TITLE", "微信").strip() or "微信"
-        raw_classes = os.getenv("WECHAT_CV_WINDOW_CLASSES", "WeChatMainWndForPC")
+        raw_classes = os.getenv("WECHAT_CV_WINDOW_CLASSES", "WeChatMainWndForPC,Qt51514QWindowIcon")
         self.window_classes = [item.strip() for item in raw_classes.split(",") if item.strip()]
         self.template_names: Dict[str, str] = {
             "session": os.getenv("WECHAT_CV_SESSION_TEMPLATE", "session.png"),
@@ -135,6 +173,10 @@ class CVWeChatOpenIdCollector:
             "close": (0.70, 0.00, 0.30, 0.20),
         }
         self._pyautogui = None
+        self._cv2 = None
+        self._numpy = None
+        self._mss = None
+        self._scaled_template_dir = self.base_dir / "logs" / "cv_template_cache"
 
     def run_once(self) -> dict:
         self.logger.info("starting one cv collection run")
@@ -142,14 +184,34 @@ class CVWeChatOpenIdCollector:
         with self.temporary_capture_proxy():
             window = self.find_wechat_window()
             self.activate_window(window)
+            if self.find_template_location("menu_button", window.rect) is None:
+                existing_browser = self.find_browser_window()
+                if existing_browser is not None:
+                    self.logger.info("browser window already open, closing it before starting a new collection run")
+                    self.close_browser(window)
+                    self.activate_window(window)
 
             baseline = self._snapshot_file(self.mitm_result_path)
             self.logger.info("waiting for mitmproxy capture file at %s", self.mitm_result_path)
 
-            self.click_template("session", window.rect)
-            time.sleep(self.click_delay)
+            if self.find_template_location("menu_button", window.rect) is not None:
+                self.logger.info("menu button already visible, skipping session click")
+            else:
+                self.click_template("session", window.rect)
+                self.wait_for_template(
+                    "menu_button",
+                    window.rect,
+                    timeout=self.session_ready_timeout,
+                    description="menu button after opening the 微助教 session",
+                )
+
             self.click_template("menu_button", window.rect)
-            time.sleep(self.click_delay)
+            self.wait_for_template(
+                "menu_item",
+                window.rect,
+                timeout=self.menu_popup_timeout,
+                description="menu item popup after clicking the menu button",
+            )
             self.click_template("menu_item", window.rect)
             time.sleep(self.browser_delay)
 
@@ -184,19 +246,50 @@ class CVWeChatOpenIdCollector:
         self.logger.info("result written to %s", self.config.output_path)
 
     def _ensure_dependencies(self) -> None:
+        enable_high_dpi_awareness()
         if self._pyautogui is None:
             try:
                 import pyautogui
+                import cv2
+                import mss
+                import numpy
             except ImportError as exc:
                 raise OpenIdCollectorError(
-                    "cv collector dependencies missing. install pyautogui first."
+                    "cv collector dependencies missing. install pyautogui, opencv-python, numpy, and mss first."
                 ) from exc
 
             pyautogui.FAILSAFE = False
             pyautogui.PAUSE = 0.1
             self._pyautogui = pyautogui
+            self._cv2 = cv2
+            self._numpy = numpy
+            self._mss = mss
 
     def find_wechat_window(self) -> WindowInfo:
+        candidates = self._list_wechat_windows()
+        if not candidates:
+            raise OpenIdCollectorError(f'WeChat window not found for title containing "{self.window_title_contains}"')
+
+        def sort_key(item: WindowInfo) -> Tuple[int, int]:
+            class_priority = 0 if item.class_name in self.window_classes else 1
+            area_score = -(item.rect.width * item.rect.height)
+            return class_priority, area_score
+
+        candidates.sort(key=sort_key)
+        return candidates[0]
+
+    def find_browser_window(self) -> Optional[WindowInfo]:
+        candidates = [
+            item
+            for item in self._list_wechat_windows()
+            if item.class_name.startswith("Chrome_WidgetWin")
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: -(item.rect.width * item.rect.height))
+        return candidates[0]
+
+    def _list_wechat_windows(self) -> List[WindowInfo]:
         candidates: List[WindowInfo] = []
 
         @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
@@ -224,16 +317,7 @@ class CVWeChatOpenIdCollector:
             return True
 
         user32.EnumWindows(callback, 0)
-        if not candidates:
-            raise OpenIdCollectorError(f'WeChat window not found for title containing "{self.window_title_contains}"')
-
-        def sort_key(item: WindowInfo) -> Tuple[int, int]:
-            class_priority = 0 if item.class_name in self.window_classes else 1
-            area_score = -(item.rect.width * item.rect.height)
-            return class_priority, area_score
-
-        candidates.sort(key=sort_key)
-        return candidates[0]
+        return candidates
 
     def activate_window(self, window: WindowInfo) -> None:
         user32.ShowWindow(window.hwnd, SW_RESTORE)
@@ -254,50 +338,108 @@ class CVWeChatOpenIdCollector:
         self._click_location(location)
 
     def find_template_location(self, role: str, window_rect: Optional[WindowRect]):
-        pyautogui = self._pyautogui
-        if pyautogui is None:
-            raise OpenIdCollectorError("pyautogui not initialized")
+        cv2 = self._cv2
+        numpy = self._numpy
+        mss = self._mss
+        if cv2 is None or numpy is None or mss is None:
+            raise OpenIdCollectorError("cv matching dependencies are not initialized")
 
-        image_path = self._resolve_template(role)
         region = self._build_region(role, window_rect)
-        try:
-            return pyautogui.locateCenterOnScreen(
-                str(image_path),
-                confidence=self.match_confidence,
-                region=region,
-                grayscale=True,
+        screen = self._capture_match_image(region)
+        for image_path in self._iter_template_candidates(role):
+            template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+            if template is None:
+                continue
+            if template.shape[0] > screen.shape[0] or template.shape[1] > screen.shape[1]:
+                continue
+
+            result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+            _, max_value, _, max_location = cv2.minMaxLoc(result)
+            if max_value < self.match_confidence:
+                continue
+
+            offset_left = region[0] if region else 0
+            offset_top = region[1] if region else 0
+            return SimpleNamespace(
+                x=offset_left + max_location[0] + template.shape[1] // 2,
+                y=offset_top + max_location[1] + template.shape[0] // 2,
             )
-        except Exception as exc:
-            if exc.__class__.__name__.endswith("ImageNotFoundException"):
-                return None
-            raise
+        return None
 
     def close_browser(self, window: WindowInfo) -> None:
         deadline = time.monotonic() + self.close_timeout
         last_error: Optional[str] = None
+        browser_window = self.find_browser_window() or window
 
         while time.monotonic() < deadline:
-            self.activate_window(window)
+            self.activate_window(browser_window)
             try:
                 location = self.find_template_location("close", None)
                 if location is None:
                     raise OpenIdCollectorError("close template not visible yet")
                 self._click_location(location)
                 time.sleep(max(0.2, self.click_delay))
-                if self.find_template_location("close", None) is None:
+                self.activate_window(window)
+                if self.find_template_location("menu_button", window.rect) is not None:
                     return
             except Exception as exc:
                 last_error = str(exc) or exc.__class__.__name__
             time.sleep(self.close_poll_interval)
 
+        try:
+            self._close_browser_window(browser_window, window)
+            return
+        except Exception as exc:
+            last_error = f"{last_error}; wm_close: {str(exc) or exc.__class__.__name__}" if last_error else (
+                str(exc) or exc.__class__.__name__
+            )
+
+        try:
+            self._close_browser_with_shortcuts(browser_window, window)
+            return
+        except Exception as exc:
+            fallback_error = str(exc) or exc.__class__.__name__
+
         detail = f"last error: {last_error}" if last_error else "close template was never clickable"
-        raise OpenIdCollectorError(f"failed to close WeChat browser after capture, {detail}")
+        raise OpenIdCollectorError(
+            f"failed to close WeChat browser after capture, {detail}; keyboard fallback: {fallback_error}"
+        )
 
     def _click_location(self, location) -> None:
         pyautogui = self._pyautogui
         if pyautogui is None:
             raise OpenIdCollectorError("pyautogui not initialized")
         pyautogui.click(int(location.x), int(location.y))
+
+    def _close_browser_with_shortcuts(self, browser_window: WindowInfo, return_window: WindowInfo) -> None:
+        pyautogui = self._pyautogui
+        if pyautogui is None:
+            raise OpenIdCollectorError("pyautogui not initialized")
+
+        self.activate_window(browser_window)
+        for action_name, action in (
+            ("alt+left", lambda: pyautogui.hotkey("alt", "left")),
+            ("esc", lambda: pyautogui.press("esc")),
+        ):
+            action()
+            time.sleep(max(0.6, self.click_delay))
+            self.activate_window(return_window)
+            if self.find_template_location("menu_button", return_window.rect) is not None:
+                self.logger.info("browser closed using keyboard fallback: %s", action_name)
+                return
+
+        raise OpenIdCollectorError("menu button did not reappear after keyboard fallback")
+
+    def _close_browser_window(self, browser_window: WindowInfo, return_window: WindowInfo) -> None:
+        user32.PostMessageW(browser_window.hwnd, WM_CLOSE, 0, 0)
+        deadline = time.monotonic() + max(1.5, self.click_delay * 2)
+        while time.monotonic() < deadline:
+            time.sleep(self.close_poll_interval)
+            self.activate_window(return_window)
+            if self.find_template_location("menu_button", return_window.rect) is not None:
+                self.logger.info("browser closed using WM_CLOSE")
+                return
+        raise OpenIdCollectorError("menu button did not reappear after WM_CLOSE")
 
     @contextmanager
     def temporary_capture_proxy(self):
@@ -432,6 +574,41 @@ class CVWeChatOpenIdCollector:
             return default
         return raw.strip().lower() not in {"0", "false", "no", "off"}
 
+    def _read_float_list_env(self, name: str, default: List[float]) -> List[float]:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+
+        values: List[float] = []
+        for part in raw.split(","):
+            stripped = part.strip()
+            if not stripped:
+                continue
+            values.append(float(stripped))
+        return values or default
+
+    def wait_for_template(
+        self,
+        role: str,
+        window_rect: Optional[WindowRect],
+        *,
+        timeout: float,
+        description: Optional[str] = None,
+    ):
+        deadline = time.monotonic() + max(0.1, timeout)
+        while time.monotonic() < deadline:
+            location = self.find_template_location(role, window_rect)
+            if location is not None:
+                return location
+            time.sleep(self.poll_interval)
+
+        image_path = self._resolve_template(role)
+        region = self._build_region(role, window_rect)
+        detail = description or role
+        raise OpenIdCollectorError(
+            f'cv template "{role}" not found while waiting for {detail}. template={image_path} region={region}'
+        )
+
     def wait_for_openid_from_mitm(self, baseline: FileSnapshot) -> str:
         deadline = time.monotonic() + self.capture_timeout
         last_parse_error: Optional[str] = None
@@ -528,10 +705,52 @@ class CVWeChatOpenIdCollector:
             raise OpenIdCollectorError(f"unknown cv template role: {role}")
         path = Path(filename)
         if not path.is_absolute():
+            override_path = self.template_override_dir / path.name
+            if override_path.exists():
+                return override_path
             path = self.template_dir / path
         if not path.exists():
             raise OpenIdCollectorError(f"cv template missing for role {role}: {path}")
         return path
+
+    def _iter_template_candidates(self, role: str):
+        base_path = self._resolve_template(role)
+        yielded = set()
+
+        for scale in self.template_scales:
+            candidate = self._get_scaled_template(base_path, scale)
+            key = str(candidate).lower()
+            if key in yielded:
+                continue
+            yielded.add(key)
+            yield candidate
+
+    def _get_scaled_template(self, path: Path, scale: float) -> Path:
+        if abs(scale - 1.0) < 0.001:
+            return path
+
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise OpenIdCollectorError("Pillow is required for scaled cv template matching") from exc
+
+        scale_label = f"{scale:.2f}".replace(".", "_")
+        cached_path = self._scaled_template_dir / path.stem / f"{scale_label}x{path.suffix}"
+        cached_path.parent.mkdir(parents=True, exist_ok=True)
+
+        needs_refresh = True
+        if cached_path.exists():
+            needs_refresh = cached_path.stat().st_mtime_ns < path.stat().st_mtime_ns
+
+        if needs_refresh:
+            with Image.open(path) as image:
+                width = max(1, int(round(image.width * scale)))
+                height = max(1, int(round(image.height * scale)))
+                resample_attr = getattr(Image, "Resampling", Image)
+                resized = image.resize((width, height), resample_attr.LANCZOS)
+                resized.save(cached_path)
+
+        return cached_path
 
     def _build_region(self, role: str, window_rect: Optional[WindowRect]) -> Optional[Tuple[int, int, int, int]]:
         env_name = f"WECHAT_CV_{role.upper()}_REGION"
@@ -551,6 +770,34 @@ class CVWeChatOpenIdCollector:
         width = max(1, int(window_rect.width * width_ratio))
         height = max(1, int(window_rect.height * height_ratio))
         return left, top, width, height
+
+    def _capture_match_image(self, region: Optional[Tuple[int, int, int, int]]):
+        cv2 = self._cv2
+        numpy = self._numpy
+        mss = self._mss
+        if cv2 is None or numpy is None or mss is None:
+            raise OpenIdCollectorError("cv matching dependencies are not initialized")
+
+        try:
+            with mss.mss() as capture:
+                if region is None:
+                    monitor = capture.monitors[1]
+                else:
+                    left, top, width, height = region
+                    monitor = {
+                        "left": int(left),
+                        "top": int(top),
+                        "width": int(width),
+                        "height": int(height),
+                    }
+                grabbed = capture.grab(monitor)
+        except Exception as exc:
+            raise OpenIdCollectorError(f"screen grab failed: {exc}") from exc
+
+        image = numpy.array(grabbed)
+        if image.size == 0:
+            raise OpenIdCollectorError("screen grab returned an empty image")
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
 
     def _get_window_text(self, hwnd: int) -> str:
         length = user32.GetWindowTextLengthW(hwnd)

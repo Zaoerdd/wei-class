@@ -38,13 +38,19 @@
 ### 新版微信 `cv`
 
 1. 唤醒并置顶微信窗口
-2. 根据模板图点击 `微助教服务号`
-3. 点击 `学生 -> 全部`
-4. 临时把系统代理切到本机 `mitmproxy`
-5. 等待微信内置浏览器访问微助教页面
-6. 从 `mitmproxy` 抓到的请求/响应中提取 `openid`
-7. 关闭内置浏览器
-8. 恢复原系统代理
+2. 如果底部 `学生(S)` 按钮已经可见，跳过重新点击 `微助教服务号`
+3. 如果按钮不可见，再根据模板图点击 `微助教服务号`
+4. 等待聊天页稳定后，点击 `学生 -> 全部`
+5. 临时把系统代理切到本机 `mitmproxy`
+6. 等待微信内置浏览器访问微助教页面
+7. 从 `mitmproxy` 抓到的请求/响应中提取 `openid`
+8. 尝试关闭内置浏览器并回到聊天页
+9. 恢复原系统代理
+
+注意：
+
+- 如果当前已经停留在 `微助教服务号` 聊天页，再次点击左侧会话可能会导致取消选中，进而看不到底部 `学生(S)` 按钮
+- 当前版本会优先检查底部按钮是否已经可见；可见时不会重复点击会话
 
 如果你的机器原本已经有系统代理，比如 `127.0.0.1:7890`，项目提供的 `start_mitmproxy_openid.ps1` 会自动把 `mitmproxy` 挂在这个代理前面，形成：
 
@@ -53,7 +59,7 @@
 ## 环境要求
 
 - Windows 10 / 11
-- Python 3.9 及以上，推荐 Python 3.10+
+- Python 3.9 及以上，推荐 Python 3.9
 - 已登录的微信桌面版
 - 能正常访问微助教网页
 - 如果使用 `cv` 模式：
@@ -76,7 +82,9 @@
 - [install_mitmproxy_cert.ps1](install_mitmproxy_cert.ps1)
   将 `mitmproxy` 根证书导入当前用户证书库
 - [cv_templates](cv_templates)
-  新版微信 `cv` 模式使用的模板图目录
+  新版微信 `cv` 模式使用的仓库默认模板图目录
+- [cv_templates_local](cv_templates_local)
+  新版微信 `cv` 模式使用的本机覆盖模板目录；存在同名文件时优先使用
 - [logs/latest_openid.json](logs/latest_openid.json)
   最近一次有效 `openid` 结果
 - [logs/mitm_openid_result.txt](logs/mitm_openid_result.txt)
@@ -104,6 +112,7 @@ pip install -r requirements.txt
 - `uiautomation`
 - `opencv-python`
 - `pyautogui`
+- `mss`
 
 注意：
 
@@ -205,7 +214,11 @@ python -m venv .venv-mitm
 
 ### 3. 准备模板图
 
-把新版微信界面的模板图放到 [cv_templates](cv_templates)：
+把新版微信界面的模板图放到 [cv_templates](cv_templates)。
+
+如果某台机器的微信界面和仓库默认模板不完全一致，建议把同名模板放到 [cv_templates_local](cv_templates_local)；采集器会优先使用本机覆盖模板，不需要直接改仓库里的默认模板。
+
+可用模板文件：
 
 - `session.png`
   左侧会话里的 `微助教服务号`
@@ -221,6 +234,9 @@ python -m venv .venv-mitm
 - 截图尽量小，只保留稳定区域
 - 运行时缩放比例尽量和截图时一致
 - 微信主题、字体和分辨率不要频繁变动
+- `session.png` 推荐截取左侧会话条目的稳定区域
+- 如果当前已经在 `微助教服务号` 聊天页，不要为了截图或调试再手动点一次会话
+- 如果 `学生(S)` 或 `全部(A)` 的样式和仓库默认模板不同，优先在 `cv_templates_local` 放本机版本
 
 模板图裁剪说明可参考 [cv_templates/README.md](cv_templates/README.md)
 
@@ -250,6 +266,12 @@ Using upstream proxy: 127.0.0.1:7890
 ```powershell
 $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 .\.venv\Scripts\python.exe web.py --openid-method cv
+```
+
+或者直接使用项目自带脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_web_app.ps1 -OpenIdMethod cv
 ```
 
 现在不需要手动修改 Windows 系统代理。
@@ -284,6 +306,8 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 启动时如果没有采集到新的 `openid`，会尝试回退读取：
 
 - [logs/latest_openid.json](logs/latest_openid.json)
+
+此时 `/api/openid_status` 里的 `current_source` 可能显示为 `file`，表示服务当前使用的是缓存 `openid`，而不是刚刚新采集到的结果。
 
 ## 六、常用命令
 
@@ -327,8 +351,12 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 | 变量名 | 默认值 | 说明 |
 | --- | --- | --- |
 | `WECHAT_CV_TEMPLATE_DIR` | `cv_templates` | 模板图目录 |
+| `WECHAT_CV_TEMPLATE_OVERRIDE_DIR` | `cv_templates_local` | 本机覆盖模板目录；同名文件优先于默认模板 |
 | `WECHAT_CV_MATCH_THRESHOLD` | `0.82` | 模板匹配阈值 |
+| `WECHAT_CV_TEMPLATE_SCALES` | `1.0,1.25,1.5,1.75,2.0` | 模板匹配时自动尝试的缩放比例 |
 | `WECHAT_CV_CLICK_DELAY` | `0.8` | 每次点击后的等待时间 |
+| `WECHAT_CV_SESSION_READY_TIMEOUT` | `6.0` | 打开 `微助教服务号` 后等待底部按钮出现的时间 |
+| `WECHAT_CV_MENU_POPUP_TIMEOUT` | `3.0` | 点击 `学生(S)` 后等待弹出菜单出现的时间 |
 | `WECHAT_CV_BROWSER_DELAY` | `3.0` | 打开微信浏览器后的等待时间 |
 | `WECHAT_CV_MITM_TIMEOUT` | `max(15, browser_timeout)` | 等待 mitm 结果的超时时间 |
 | `WECHAT_CV_MITM_POLL_INTERVAL` | `0.4` | 轮询 mitm 结果文件的间隔 |
@@ -340,7 +368,7 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 | `WECHAT_CV_AUTO_SWITCH_SYSTEM_PROXY` | `1` | 是否自动切换/恢复系统代理 |
 | `WECHAT_CV_MITM_RESULT_PATH` | `logs/mitm_openid_result.txt` | mitm 输出文件 |
 | `WECHAT_CV_WINDOW_TITLE` | `微信` | 查找微信窗口时使用的标题关键字 |
-| `WECHAT_CV_WINDOW_CLASSES` | `WeChatMainWndForPC` | 微信窗口类名列表 |
+| `WECHAT_CV_WINDOW_CLASSES` | `WeChatMainWndForPC,Qt51514QWindowIcon` | 微信主窗口类名列表 |
 | `WECHAT_CV_SESSION_TEMPLATE` | `session.png` | 会话模板文件 |
 | `WECHAT_CV_MENU_BUTTON_TEMPLATE` | `student_button.png` | 底部按钮模板文件 |
 | `WECHAT_CV_MENU_ITEM_TEMPLATE` | `all_item.png` | 菜单项模板文件 |
@@ -389,6 +417,11 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
   "source": "collector"
 }
 ```
+
+其中 `source` 可能是：
+
+- `collector`：本次运行刚采集到的新结果
+- `file`：启动或刷新时回退使用了缓存结果
 
 ### `logs/mitm_openid_result.txt`
 
@@ -453,6 +486,9 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 - 微信是否被遮挡
 - 微信是否停留在正确聊天界面
 - `微助教服务号` 是否在左侧会话列表可见
+- 如果 `微助教服务号` 已经处于选中状态，不要再手动点击一次左侧会话
+- 优先把本机专用模板放到 [cv_templates_local](cv_templates_local)
+- 如果上一次采集后残留在内置浏览器页，先手动退回聊天页再重试
 
 ### 4. `uiautomation` 模式失败
 
