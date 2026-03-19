@@ -218,6 +218,47 @@ class RuntimeDiagnosticsSafetyTests(unittest.TestCase):
             self.assertNotIn("user:pass", proxy_value)
             self.assertEqual(proxy_value, "http://[redacted]@example.com:8080")
 
+    def test_template_status_endpoint_reports_sources_and_missing_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            template_dir = temp_root / "cv_templates"
+            override_dir = temp_root / "cv_templates_local"
+            template_dir.mkdir()
+            override_dir.mkdir()
+
+            (template_dir / "session.png").write_bytes(b"session")
+            (template_dir / "all_item.png").write_bytes(b"menu-item")
+            (override_dir / "student_button.png").write_bytes(b"menu-button")
+
+            dummy_collector = SimpleNamespace(
+                method_name="cv",
+                template_dir=template_dir,
+                template_override_dir=override_dir,
+                template_names={
+                    "session": "session.png",
+                    "menu_button": "student_button.png",
+                    "menu_item": "all_item.png",
+                    "close": "close_button.png",
+                },
+            )
+
+            with patch.object(web, "collector", dummy_collector):
+                response = web.app.test_client().get("/api/template_status")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["counts"]["total"], 4)
+            self.assertEqual(payload["counts"]["default"], 2)
+            self.assertEqual(payload["counts"]["override"], 1)
+            self.assertEqual(payload["counts"]["missing"], 1)
+            self.assertEqual(payload["missing_roles"], ["close"])
+            self.assertEqual(payload["override_roles"], ["menu_button"])
+
+            templates = {item["role"]: item for item in payload["templates"]}
+            self.assertEqual(templates["session"]["source"], "default")
+            self.assertEqual(templates["menu_button"]["source"], "override")
+            self.assertEqual(templates["close"]["source"], "missing")
+
 
 if __name__ == "__main__":
     unittest.main()
