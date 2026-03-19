@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from flask import Flask, jsonify, make_response, render_template, request, send_file
@@ -68,6 +69,16 @@ SUPPORT_BUNDLE_ENV_KEYS = {
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "NO_PROXY",
+}
+PROXY_RELATED_KEYS = {
+    "allproxy",
+    "autoconfigurl",
+    "effectiveproxyserver",
+    "httpproxy",
+    "httpsproxy",
+    "noproxy",
+    "proxyoverride",
+    "proxyserver",
 }
 SENSITIVE_STRUCTURED_KEYS = {
     "accesstoken",
@@ -188,6 +199,46 @@ def redact_sensitive_text(value: str) -> str:
     return HEX32_TEXT_RE.sub(lambda match: mask_openid(match.group(0)) or "[redacted]", redacted)
 
 
+def redact_proxy_endpoint(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return text
+
+    try:
+        parsed = urlsplit(text)
+    except Exception:
+        parsed = None
+
+    if parsed and parsed.scheme and (parsed.username or parsed.password):
+        host = parsed.hostname or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        netloc = f"[redacted]@{host}" if host else "[redacted]"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+    if "@" in text:
+        userinfo, rest = text.rsplit("@", 1)
+        if ":" in userinfo and rest:
+            return f"[redacted]@{rest}"
+    return text
+
+
+def redact_proxy_value(value: str) -> str:
+    parts: List[str] = []
+    for segment in str(value or "").split(";"):
+        item = segment.strip()
+        if not item:
+            continue
+        if "=" in item and "://" not in item:
+            key, item_value = item.split("=", 1)
+            parts.append(f"{key}={redact_proxy_endpoint(item_value)}")
+            continue
+        parts.append(redact_proxy_endpoint(item))
+    return ";".join(parts)
+
+
 def redact_sensitive_value(value: Any, key: Optional[str] = None) -> Any:
     if isinstance(value, dict):
         return {item_key: redact_sensitive_value(item_value, item_key) for item_key, item_value in value.items()}
@@ -203,6 +254,8 @@ def redact_sensitive_value(value: Any, key: Optional[str] = None) -> Any:
         return value
 
     if isinstance(value, str):
+        if normalized_key in PROXY_RELATED_KEYS:
+            return redact_sensitive_text(redact_proxy_value(value))
         if "openid" in normalized_key:
             return mask_openid(value) or "[redacted]"
         if normalized_key in SENSITIVE_STRUCTURED_KEYS:
@@ -1470,6 +1523,11 @@ def configure_runtime(openid_method: Optional[str] = None) -> None:
 configure_runtime()
 
 
+def ensure_runtime_configured() -> None:
+    if openid_refresh_manager is None:
+        raise RuntimeError("OpenID runtime is not configured")
+
+
 def ensure_runtime_initialized() -> None:
     global runtime_initialized
     if runtime_initialized:
@@ -1478,8 +1536,7 @@ def ensure_runtime_initialized() -> None:
     with runtime_init_lock:
         if runtime_initialized:
             return
-        if openid_refresh_manager is None:
-            raise RuntimeError("OpenID runtime is not configured")
+        ensure_runtime_configured()
         openid_refresh_manager.start()
         runtime_initialized = True
 
@@ -2689,13 +2746,13 @@ def openid_status():
 
 @app.route("/api/health")
 def health_status():
-    ensure_runtime_initialized()
+    ensure_runtime_configured()
     return jsonify(build_health_report())
 
 
 @app.route("/api/support_bundle")
 def support_bundle():
-    ensure_runtime_initialized()
+    ensure_runtime_configured()
     try:
         archive, filename = build_support_bundle_archive()
         return send_file(
