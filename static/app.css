@@ -766,6 +766,13 @@ a {
     gap: 18px;
 }
 
+.template-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    margin-top: 18px;
+}
+
 .health-card {
     padding: 20px;
     border-radius: 24px;
@@ -898,6 +905,7 @@ a {
     .content-grid,
     .guide-grid,
     .health-check-grid,
+    .template-grid,
     .status-glance-grid,
     .overview-grid,
     .timeline {

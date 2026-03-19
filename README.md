@@ -257,6 +257,8 @@ python -m venv .venv-mitm
 
 如果某台机器的微信界面和仓库默认模板不完全一致，建议把同名模板放到 [cv_templates_local](cv_templates_local)；采集器会优先使用本机覆盖模板，不需要直接改仓库里的默认模板。
 
+体检页和 `GET /api/template_status` 会直接显示每张模板当前来自默认目录、本机覆盖目录还是仍然缺失，方便确认当前到底命中了哪一套模板。
+
 可用模板文件：
 
 - `session.png`
@@ -442,7 +444,9 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 - [http://127.0.0.1:5000/api/check_session](http://127.0.0.1:5000/api/check_session)
   查看当前自动会话状态
 - [http://127.0.0.1:5000/api/health](http://127.0.0.1:5000/api/health)
-  查看结构化健康检查结果
+  查看结构化健康检查结果，结果里也会包含模板状态快照
+- [http://127.0.0.1:5000/api/template_status](http://127.0.0.1:5000/api/template_status)
+  单独查看模板来源、覆盖关系、缺失模板和最近更新时间
 - [http://127.0.0.1:5000/api/support_bundle](http://127.0.0.1:5000/api/support_bundle)
   导出一份脱敏诊断包，适合交给开发者排查
 - [http://127.0.0.1:5000/api/openid_status](http://127.0.0.1:5000/api/openid_status)

@@ -24,6 +24,15 @@ function safeText(text, fallback = "等待中") {
     return looksLikeMojibake(text) ? fallback : String(text);
 }
 
+function escapeHtml(text) {
+    return String(text ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+}
+
 function formatTime(value) {
     if (!value) {
         return "-";
@@ -101,6 +110,35 @@ function categoryLabel(category) {
     return "环境检查";
 }
 
+function templateRoleLabel(role) {
+    if (role === "session") {
+        return "会话模板";
+    }
+    if (role === "menu_button") {
+        return "底部按钮模板";
+    }
+    if (role === "menu_item") {
+        return "菜单项模板";
+    }
+    if (role === "close") {
+        return "关闭按钮模板";
+    }
+    return role || "未命名模板";
+}
+
+function templateSourceTone(source) {
+    if (source === "missing") {
+        return "danger";
+    }
+    if (source === "override" || source === "configured") {
+        return "warning";
+    }
+    if (source === "default") {
+        return "success";
+    }
+    return "idle";
+}
+
 function renderBanner(report) {
     const banner = $("health-banner");
     const summary = report.summary || {};
@@ -171,8 +209,8 @@ function renderRuntime(report) {
 
     $("health-runtime-details").innerHTML = details.map(([label, value]) => `
         <div class="detail-row">
-            <dt>${label}</dt>
-            <dd>${value || "-"}</dd>
+            <dt>${escapeHtml(label)}</dt>
+            <dd>${escapeHtml(value || "-")}</dd>
         </div>
     `).join("");
 }
@@ -186,8 +224,8 @@ function renderFacts(facts) {
         <div class="health-facts">
             ${facts.map((fact) => `
                 <div class="health-fact">
-                    <span>${safeText(fact.label, "信息")}</span>
-                    <strong>${safeText(String(fact.value ?? "-"), "-")}</strong>
+                    <span>${escapeHtml(safeText(fact.label, "信息"))}</span>
+                    <strong>${escapeHtml(safeText(String(fact.value ?? "-"), "-"))}</strong>
                 </div>
             `).join("")}
         </div>
@@ -214,23 +252,76 @@ function renderChecks(report) {
             <article class="health-card health-card--${tone}">
                 <div class="health-card-top">
                     <div>
-                        <p class="panel-eyebrow">${categoryLabel(check.category)}</p>
-                        <h3>${safeText(check.title, "未命名检查")}</h3>
+                        <p class="panel-eyebrow">${escapeHtml(categoryLabel(check.category))}</p>
+                        <h3>${escapeHtml(safeText(check.title, "未命名检查"))}</h3>
                     </div>
                     <span class="state-pill state-pill--${tone} state-pill--compact">${healthStatusLabel(check.status)}</span>
                 </div>
-                <p class="health-card-summary">${safeText(check.summary, "暂无摘要")}</p>
-                ${check.detail ? `<p class="health-card-detail">${safeText(check.detail, "")}</p>` : ""}
+                <p class="health-card-summary">${escapeHtml(safeText(check.summary, "暂无摘要"))}</p>
+                ${check.detail ? `<p class="health-card-detail">${escapeHtml(safeText(check.detail, ""))}</p>` : ""}
                 ${renderFacts(check.facts)}
                 ${check.action ? `
                     <div class="health-card-action">
                         <strong>下一步</strong>
-                        <p>${safeText(check.action, "按当前提示处理即可。")}</p>
+                        <p>${escapeHtml(safeText(check.action, "按当前提示处理即可。"))}</p>
                     </div>
                 ` : ""}
             </article>
         `;
     }).join("");
+}
+
+function renderTemplateStatus(report) {
+    const templateStatus = report.template_status || {};
+    const templates = Array.isArray(templateStatus.templates) ? templateStatus.templates : [];
+    const counts = templateStatus.counts || {};
+    const summary = templateStatus.summary || "等待模板状态";
+
+    $("health-template-count").textContent = `${templates.length} 张`;
+    $("health-template-summary").textContent = summary;
+
+    if (!templates.length) {
+        $("health-template-grid").innerHTML = `
+            <div class="empty-state">
+                <strong>还没有模板状态</strong>
+                <p>如果当前不是新版微信模式，也可以先查看默认模板目录和本机覆盖目录。</p>
+            </div>
+        `;
+        return;
+    }
+
+    $("health-template-grid").innerHTML = templates.map((item) => {
+        const tone = templateSourceTone(item.source);
+        const facts = [
+            { label: "当前来源", value: item.source_label || "未知" },
+            { label: "文件名", value: item.filename || "-" },
+            { label: "默认模板", value: item.default_exists ? "存在" : "缺失" },
+            { label: "本机覆盖", value: item.override_exists ? "存在" : "缺失" },
+            { label: "更新时间", value: item.updated_at ? formatTime(item.updated_at) : "-" },
+        ];
+        const detail = item.resolved_path || item.default_path || item.override_path || "-";
+        const cardSummary = item.exists
+            ? `当前使用 ${item.source_label || "模板"}`
+            : "当前还没有可用模板文件";
+        return `
+            <article class="health-card health-card--${tone}">
+                <div class="health-card-top">
+                    <div>
+                        <p class="panel-eyebrow">模板角色</p>
+                        <h3>${escapeHtml(templateRoleLabel(item.role))}</h3>
+                    </div>
+                    <span class="state-pill state-pill--${tone} state-pill--compact">${escapeHtml(item.source_label || "未知")}</span>
+                </div>
+                <p class="health-card-summary">${escapeHtml(cardSummary)}</p>
+                <p class="health-card-detail">${escapeHtml(detail)}</p>
+                ${renderFacts(facts)}
+            </article>
+        `;
+    }).join("");
+
+    if ((counts.missing || 0) > 0) {
+        $("health-template-summary").textContent = `${summary} 当前缺失 ${counts.missing} 张模板。`;
+    }
 }
 
 function renderReport(report) {
@@ -240,6 +331,7 @@ function renderReport(report) {
     renderOverview(report);
     renderChecks(report);
     renderRuntime(report);
+    renderTemplateStatus(report);
 }
 
 function renderLoadError(message) {
@@ -253,7 +345,13 @@ function renderLoadError(message) {
     $("health-check-grid").innerHTML = `
         <div class="empty-state">
             <strong>无法连接本地服务</strong>
-            <p>${message}</p>
+            <p>${escapeHtml(message)}</p>
+        </div>
+    `;
+    $("health-template-grid").innerHTML = `
+        <div class="empty-state">
+            <strong>模板状态暂时不可用</strong>
+            <p>${escapeHtml(message)}</p>
         </div>
     `;
 }

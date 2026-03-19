@@ -270,54 +270,125 @@ def build_support_runtime_snapshot(runtime_state: Dict[str, Any]) -> Dict[str, A
 
 
 def build_template_snapshot() -> Dict[str, Any]:
-    template_dir = Path(getattr(collector, "template_dir", BASE_DIR / "cv_templates"))
-    override_dir = Path(getattr(collector, "template_override_dir", BASE_DIR / "cv_templates_local"))
+    runtime_settings = get_runtime_settings(reload=True)
+    template_dir = Path(getattr(collector, "template_dir", None) or runtime_settings.get("cv.template_dir"))
+    override_dir = Path(getattr(collector, "template_override_dir", None) or runtime_settings.get("cv.template_override_dir"))
     template_names = dict(
         getattr(
             collector,
             "template_names",
             {
-                "session": "session.png",
-                "menu_button": "student_button.png",
-                "menu_item": "all_item.png",
-                "close": "close_button.png",
+                "session": runtime_settings.get("cv.templates.session"),
+                "menu_button": runtime_settings.get("cv.templates.menu_button"),
+                "menu_item": runtime_settings.get("cv.templates.menu_item"),
+                "close": runtime_settings.get("cv.templates.close"),
             },
         )
     )
-
+    source_labels = {
+        "override": "本机覆盖",
+        "default": "默认模板",
+        "configured": "自定义路径",
+        "missing": "缺失",
+    }
+    counts = {
+        "total": len(template_names),
+        "default": 0,
+        "override": 0,
+        "configured": 0,
+        "missing": 0,
+    }
+    latest_updated_at: Optional[str] = None
+    latest_timestamp: Optional[float] = None
+    missing_roles: List[str] = []
+    override_roles: List[str] = []
+    default_roles: List[str] = []
+    configured_roles: List[str] = []
     items: List[Dict[str, Any]] = []
+
     for role, filename in sorted(template_names.items()):
-        override_path = override_dir / filename
-        default_path = template_dir / filename
+        role_path = Path(filename)
+        override_path = override_dir / role_path.name
+        default_path = template_dir / role_path
         resolved_path = None
         source = "missing"
         exists = False
 
-        if override_path.exists():
-            resolved_path = override_path
-            source = "override"
-            exists = True
-        elif default_path.exists():
-            resolved_path = default_path
-            source = "default"
-            exists = True
+        if role_path.is_absolute():
+            default_path = role_path
+            if role_path.exists():
+                resolved_path = role_path
+                source = "configured"
+                exists = True
+        else:
+            if override_path.exists():
+                resolved_path = override_path
+                source = "override"
+                exists = True
+            elif default_path.exists():
+                resolved_path = default_path
+                source = "default"
+                exists = True
+
+        if exists and resolved_path:
+            counts[source] += 1
+            updated_at = datetime.fromtimestamp(resolved_path.stat().st_mtime).astimezone().isoformat()
+            if latest_timestamp is None or resolved_path.stat().st_mtime > latest_timestamp:
+                latest_timestamp = resolved_path.stat().st_mtime
+                latest_updated_at = updated_at
+        else:
+            counts["missing"] += 1
+            updated_at = None
+            missing_roles.append(role)
+
+        if source == "override":
+            override_roles.append(role)
+        elif source == "default":
+            default_roles.append(role)
+        elif source == "configured":
+            configured_roles.append(role)
 
         items.append(
             {
                 "role": role,
                 "filename": filename,
                 "source": source,
+                "source_label": source_labels.get(source, source),
                 "exists": exists,
                 "default_path": str(default_path),
+                "default_exists": default_path.exists(),
                 "override_path": str(override_path),
+                "override_exists": override_path.exists(),
                 "resolved_path": str(resolved_path) if resolved_path else None,
                 "file_size": resolved_path.stat().st_size if resolved_path and resolved_path.exists() else None,
+                "updated_at": updated_at,
             }
         )
 
+    if counts["missing"]:
+        status = "fail"
+        summary = f"还有 {counts['missing']} 个模板文件缺失。"
+    elif counts["override"] or counts["configured"]:
+        status = "pass"
+        summary = "所有模板都已就绪，当前包含本机覆盖或自定义路径。"
+    else:
+        status = "pass"
+        summary = "所有模板都来自默认模板目录。"
+
     return {
+        "generated_at": datetime.now().astimezone().isoformat(),
         "template_dir": str(template_dir),
         "template_override_dir": str(override_dir),
+        "template_dir_exists": template_dir.exists(),
+        "template_override_dir_exists": override_dir.exists(),
+        "counts": counts,
+        "status": status,
+        "summary": summary,
+        "missing_roles": missing_roles,
+        "override_roles": override_roles,
+        "default_roles": default_roles,
+        "configured_roles": configured_roles,
+        "latest_updated_at": latest_updated_at,
         "templates": items,
     }
 
@@ -2301,26 +2372,17 @@ def build_mitm_certificate_health_check(runtime_state: Dict[str, Any]) -> Dict[s
     )
 
 
-def build_cv_template_health_check(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+def build_cv_template_health_check(
+    runtime_state: Dict[str, Any],
+    template_snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     method = runtime_state["summary"].get("collector_method")
-    template_dir = Path(getattr(collector, "template_dir", BASE_DIR / "cv_templates"))
-    override_dir = Path(getattr(collector, "template_override_dir", BASE_DIR / "cv_templates_local"))
-    template_names = dict(
-        getattr(
-            collector,
-            "template_names",
-            {
-                "session": "session.png",
-                "menu_button": "student_button.png",
-                "menu_item": "all_item.png",
-                "close": "close_button.png",
-            },
-        )
-    )
+    template_snapshot = template_snapshot or build_template_snapshot()
+    counts = template_snapshot.get("counts") or {}
     facts = [
-        {"label": "默认目录", "value": str(template_dir)},
-        {"label": "本机覆盖", "value": str(override_dir)},
-        {"label": "模板数量", "value": str(len(template_names))},
+        {"label": "默认目录", "value": template_snapshot.get("template_dir") or "-"},
+        {"label": "本机覆盖", "value": template_snapshot.get("template_override_dir") or "-"},
+        {"label": "模板数量", "value": str(counts.get("total") or 0)},
     ]
 
     if method != "cv":
@@ -2332,23 +2394,12 @@ def build_cv_template_health_check(runtime_state: Dict[str, Any]) -> Dict[str, A
             facts=facts,
         )
 
-    missing_roles: List[str] = []
-    resolved_items: List[str] = []
-    override_hits = 0
-    for role, filename in template_names.items():
-        override_path = override_dir / filename
-        default_path = template_dir / filename
-        if override_path.exists():
-            override_hits += 1
-            resolved_items.append(f"{role}=本机覆盖")
-            continue
-        if default_path.exists():
-            resolved_items.append(f"{role}=默认模板")
-            continue
-        missing_roles.append(role)
-        resolved_items.append(f"{role}=缺失")
-
-    facts.append({"label": "覆盖命中", "value": str(override_hits)})
+    missing_roles = list(template_snapshot.get("missing_roles") or [])
+    resolved_items = [
+        f"{item.get('role')}={item.get('source_label')}"
+        for item in template_snapshot.get("templates") or []
+    ]
+    facts.append({"label": "覆盖命中", "value": str(counts.get("override") or 0)})
     detail = "；".join(resolved_items)
 
     if missing_roles:
@@ -2475,6 +2526,7 @@ def build_health_report(
 ) -> Dict[str, Any]:
     runtime_state = runtime_state or build_runtime_state()
     listener_state = listener_state or inspect_capture_proxy_listener_state()
+    template_snapshot = build_template_snapshot()
     checks = [
         build_runtime_health_check(runtime_state),
         build_python_environment_health_check(),
@@ -2482,13 +2534,14 @@ def build_health_report(
         build_system_proxy_health_check(runtime_state, listener_state),
         build_mitm_listener_health_check(runtime_state, listener_state),
         build_mitm_certificate_health_check(runtime_state),
-        build_cv_template_health_check(runtime_state),
+        build_cv_template_health_check(runtime_state, template_snapshot),
         build_openid_cache_health_check(runtime_state),
     ]
     checks.sort(key=lambda item: (HEALTH_STATUS_ORDER.get(item.get("status"), 99), item.get("title", "")))
     return {
         "generated_at": datetime.now().astimezone().isoformat(),
         "runtime_state": runtime_state,
+        "template_status": template_snapshot,
         "summary": summarize_health_checks(checks, runtime_state),
         "checks": checks,
     }
@@ -2724,6 +2777,12 @@ def openid_status():
 def health_status():
     ensure_runtime_configured()
     return jsonify(build_health_report())
+
+
+@app.route("/api/template_status")
+def template_status():
+    ensure_runtime_configured()
+    return jsonify(build_template_snapshot())
 
 
 @app.route("/api/support_bundle")
