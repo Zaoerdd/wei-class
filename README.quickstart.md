@@ -21,6 +21,8 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+第一次启动主服务、命令行采集器或 `mitmproxy` 插件时，如果根目录还没有 `local_config.json`，程序会自动按 [local_config.example.json](local_config.example.json) 生成一份可编辑的本机配置模板。
+
 如果你需要二维码推送，可以稍后再配置 `PushPlus`；不配置也不影响本地运行。
 
 ## 3. 先判断你应该用哪种微信模式

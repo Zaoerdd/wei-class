@@ -149,6 +149,8 @@ pip install -r requirements.txt
 - 如果环境变量没配，再读取 `local_config.json`
 - 如果本地配置也没配，再回落到默认值
 
+第一次启动主服务、命令行采集器或 `mitmproxy` 插件时，如果项目根目录下还没有 `local_config.json`，程序会自动按 [local_config.example.json](local_config.example.json) 的结构生成一份可编辑的本地配置文件。
+
 推荐把“这台机器特有”的设置放进 `local_config.json`，例如：
 
 - PushPlus token / topic
