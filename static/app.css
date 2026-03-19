@@ -912,6 +912,56 @@ a {
     padding: 18px 20px;
 }
 
+.capture-step-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 18px;
+}
+
+.capture-step-item {
+    padding: 18px;
+    border-radius: 22px;
+    border: 1px solid rgba(20, 33, 61, 0.10);
+    background: rgba(255, 255, 255, 0.78);
+    display: grid;
+    gap: 10px;
+}
+
+.capture-step-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.86rem;
+    color: var(--muted);
+}
+
+.capture-step-item h3,
+.capture-step-item p {
+    margin: 0;
+}
+
+.capture-step-item p {
+    color: var(--muted);
+    line-height: 1.7;
+}
+
+.capture-step-item--done {
+    border-color: rgba(15, 118, 110, 0.22);
+    box-shadow: 0 14px 30px rgba(15, 118, 110, 0.08);
+}
+
+.capture-step-item--current,
+.capture-step-item--active {
+    border-color: rgba(245, 158, 11, 0.28);
+    box-shadow: 0 14px 30px rgba(245, 158, 11, 0.08);
+}
+
+.capture-step-item--todo {
+    opacity: 0.92;
+}
+
 .capture-status--success {
     border-color: rgba(15, 118, 110, 0.22);
     box-shadow: 0 16px 36px rgba(15, 118, 110, 0.08);
@@ -942,6 +992,13 @@ a {
     padding: 18px;
     display: grid;
     gap: 12px;
+}
+
+.capture-preview {
+    width: 100%;
+    border-radius: 16px;
+    border: 1px solid rgba(20, 33, 61, 0.08);
+    background: rgba(255, 255, 255, 0.92);
 }
 
 .capture-result-card h3 {
@@ -994,6 +1051,7 @@ a {
     .guide-grid,
     .health-check-grid,
     .template-grid,
+    .capture-step-list,
     .capture-guide,
     .capture-result-list,
     .status-glance-grid,

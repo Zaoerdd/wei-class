@@ -333,6 +333,58 @@ class RuntimeDiagnosticsSafetyTests(unittest.TestCase):
         self.assertFalse(payload["success"])
         self.assertIn("准备执行", payload["message"])
 
+    def test_template_capture_click_endpoint_returns_capture_result(self) -> None:
+        capture_calls = []
+        dummy_collector = SimpleNamespace(
+            method_name="cv",
+            capture_template_from_user_click=lambda **kwargs: capture_calls.append(kwargs)
+            or {
+                "role": kwargs["role"],
+                "path": "D:/wei-class/cv_templates_local/menu_item.png",
+                "capture_source": "user-click",
+                "image_size": {"width": 220, "height": 100},
+            },
+        )
+
+        with patch.object(web, "collector", dummy_collector), patch.object(
+            web,
+            "openid_refresh_manager",
+            SimpleNamespace(is_refreshing=False),
+        ), patch.object(
+            web,
+            "build_template_snapshot",
+            return_value={"counts": {"total": 4, "override": 2}},
+        ):
+            response = web.app.test_client().post("/api/template_capture_click", json={"role": "menu_item"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["capture"]["role"], "menu_item")
+        self.assertIn("/api/template_capture_preview/menu_item", payload["capture"]["preview_url"])
+        self.assertEqual(
+            capture_calls,
+            [{"role": "menu_item", "target": "main", "overwrite": True}],
+        )
+
+    def test_template_capture_preview_endpoint_returns_local_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            override_dir = Path(tmp_dir) / "cv_templates_local"
+            override_dir.mkdir()
+            preview_path = override_dir / "session.png"
+            preview_path.write_bytes(b"preview-image")
+
+            dummy_collector = SimpleNamespace(
+                template_override_dir=override_dir,
+                template_names={"session": "session.png"},
+            )
+
+            with patch.object(web, "collector", dummy_collector):
+                response = web.app.test_client().get("/api/template_capture_preview/session")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"preview-image")
+
 
 if __name__ == "__main__":
     unittest.main()

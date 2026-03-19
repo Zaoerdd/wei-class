@@ -1513,6 +1513,12 @@ template_capture_lock = threading.Lock()
 runtime_initialized = False
 RUNTIME_STATE_SCHEMA_VERSION = 1
 HEALTH_STATUS_ORDER = {"fail": 0, "warn": 1, "pass": 2, "skip": 3}
+TEMPLATE_CAPTURE_STEP_TARGETS = {
+    "session": "main",
+    "menu_button": "main",
+    "menu_item": "main",
+    "close": "browser",
+}
 
 
 def configure_runtime(openid_method: Optional[str] = None) -> None:
@@ -2410,7 +2416,7 @@ def build_cv_template_health_check(
             "fail",
             f"缺少 {len(missing_roles)} 个 cv 模板文件。",
             detail=detail,
-            action="优先去体检页底部使用“自动采集本机模板”，或手动把缺少模板补到 cv_templates_local 后再重试。",
+            action="优先去体检页底部使用“点击确认式模板采集向导”，或手动把缺少模板补到 cv_templates_local 后再重试。",
             facts=facts,
         )
 
@@ -2420,7 +2426,7 @@ def build_cv_template_health_check(
         "pass",
         "cv 模式需要的模板文件都已就绪。",
         detail=detail,
-        action="如果按钮样式不匹配，可以去体检页底部重新自动采集本机模板。",
+        action="如果按钮样式不匹配，可以去体检页底部重新运行点击确认式模板采集向导。",
         facts=facts,
     )
 
@@ -2784,6 +2790,75 @@ def health_status():
 def template_status():
     ensure_runtime_configured()
     return jsonify(build_template_snapshot())
+
+
+@app.route("/api/template_capture_preview/<role>")
+def template_capture_preview(role: str):
+    ensure_runtime_configured()
+    filename = getattr(collector, "template_names", {}).get(role)
+    if not filename:
+        return jsonify({"success": False, "message": f"unknown template role: {role}"}), 404
+
+    preview_path = Path(getattr(collector, "template_override_dir", BASE_DIR / "cv_templates_local")) / Path(filename).name
+    if not preview_path.exists():
+        return jsonify({"success": False, "message": "preview not found"}), 404
+
+    return send_file(io.BytesIO(preview_path.read_bytes()), mimetype="image/png", conditional=False)
+
+
+@app.route("/api/template_capture_click", methods=["POST"])
+def template_capture_click():
+    ensure_runtime_configured()
+
+    if getattr(collector, "method_name", None) != "cv" or not hasattr(collector, "capture_template_from_user_click"):
+        return jsonify({"success": False, "message": "当前运行方式不是 cv，不能使用点击确认式模板采集。"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    role = str(payload.get("role") or "").strip()
+    overwrite = bool(payload.get("overwrite", True))
+    target = TEMPLATE_CAPTURE_STEP_TARGETS.get(role)
+    if target is None:
+        return jsonify({"success": False, "message": f"不支持的模板角色: {role}"}), 400
+
+    if openid_refresh_manager is not None and getattr(openid_refresh_manager, "is_refreshing", False):
+        return jsonify({"success": False, "message": "当前正在自动刷新 OpenID，请等本轮结束后再采集模板。"}), 409
+
+    if not template_capture_lock.acquire(blocking=False):
+        return jsonify({"success": False, "message": "已有模板采集任务正在运行，请稍候刷新页面。"}), 409
+
+    refresh_lock = getattr(openid_refresh_manager, "_refresh_lock", None)
+    refresh_lock_acquired = False
+    if refresh_lock is not None:
+        refresh_lock_acquired = refresh_lock.acquire(blocking=False)
+        if not refresh_lock_acquired:
+            template_capture_lock.release()
+            return jsonify({"success": False, "message": "当前有 OpenID 刷新任务正在准备执行，请稍候再试。"}), 409
+
+    try:
+        capture_result = collector.capture_template_from_user_click(
+            role=role,
+            target=target,
+            overwrite=overwrite,
+        )
+        capture_result["preview_url"] = f"/api/template_capture_preview/{role}?ts={int(time.time() * 1000)}"
+        template_snapshot = build_template_snapshot()
+        return jsonify(
+            {
+                "success": True,
+                "message": f"{role} 模板已按点击位置重新采集。",
+                "capture": capture_result,
+                "template_status": template_snapshot,
+            }
+        )
+    except OpenIdCollectorError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("点击确认式模板采集失败: %s", exc)
+        return jsonify({"success": False, "message": f"点击确认式模板采集失败: {exc}"}), 500
+    finally:
+        if refresh_lock_acquired:
+            refresh_lock.release()
+        template_capture_lock.release()
 
 
 @app.route("/api/template_capture", methods=["POST"])
