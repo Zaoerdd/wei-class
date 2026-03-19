@@ -32,10 +32,10 @@ Template tips:
 
 mitmproxy wiring:
 
-- Run mitmproxy or mitmdump with [mitmproxy_openid_addon.py](/D:/Zaoer/OneDrive/Tools/wei-class/mitmproxy_openid_addon.py).
+- Run mitmproxy or mitmdump with [mitmproxy_openid_addon.py](../mitmproxy_openid_addon.py).
 - Recommended: run mitmproxy in a separate virtual environment from this Flask app.
-- Trust the mitmproxy root certificate first, for example with [install_mitmproxy_cert.ps1](/D:/Zaoer/OneDrive/Tools/wei-class/install_mitmproxy_cert.ps1).
-- Prefer [start_mitmproxy_openid.ps1](/D:/Zaoer/OneDrive/Tools/wei-class/start_mitmproxy_openid.ps1) so existing system proxies can be chained as upstream automatically.
+- Trust the mitmproxy root certificate first, for example with [install_mitmproxy_cert.ps1](../install_mitmproxy_cert.ps1).
+- Prefer [start_mitmproxy_openid.ps1](../start_mitmproxy_openid.ps1) so existing system proxies can be chained as upstream automatically.
 - `cv` mode now switches the Windows system proxy to `127.0.0.1:8080` automatically during collection and restores the previous proxy afterward.
 - Set `WECHAT_CV_MITM_RESULT_PATH` to the file written by the addon if you do not use the default path.
 - The default output file is `logs/mitm_openid_result.txt`.
@@ -44,7 +44,7 @@ mitmproxy wiring:
 Example:
 
 ```powershell
-$env:WECHAT_CV_MITM_RESULT_PATH = "D:\Zaoer\OneDrive\Tools\wei-class\logs\mitm_openid_result.txt"
+$env:WECHAT_CV_MITM_RESULT_PATH = "$PWD\logs\mitm_openid_result.txt"
 .\install_mitmproxy_cert.ps1
 .\start_mitmproxy_openid.ps1
 ```
@@ -52,6 +52,6 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "D:\Zaoer\OneDrive\Tools\wei-class\logs\mitm_o
 Then start the app:
 
 ```powershell
-$env:WECHAT_CV_MITM_RESULT_PATH = "D:\Zaoer\OneDrive\Tools\wei-class\logs\mitm_openid_result.txt"
+$env:WECHAT_CV_MITM_RESULT_PATH = "$PWD\logs\mitm_openid_result.txt"
 .\.venv\Scripts\python.exe web.py --openid-method cv
 ```

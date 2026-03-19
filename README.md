@@ -383,7 +383,7 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 
 ```json
 {
-  "openid": "88993df9f4494576c8a28609f55608d5",
+  "openid": "0123456789abcdef0123456789abcdef",
   "url": null,
   "captured_at": "2026-03-19T13:38:25+0800",
   "source": "collector"
@@ -395,7 +395,7 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 保存 `mitmproxy` 抓包结果，每行一个 JSON：
 
 ```json
-{"captured_at":"2026-03-19T13:28:59.104450+08:00","openid":"543bb0fe287b32e7b5225170e3a46247","source":"url","url":"https://v18.teachermate.cn/wechat-pro-ssr/?openid=543bb0fe287b32e7b5225170e3a46247&from=wzj","host":"v18.teachermate.cn"}
+{"captured_at":"2026-03-19T13:28:59.104450+08:00","openid":"fedcba9876543210fedcba9876543210","source":"url","url":"https://v18.teachermate.cn/wechat-pro-ssr/?openid=fedcba9876543210fedcba9876543210&from=wzj","host":"v18.teachermate.cn"}
 ```
 
 ### `logs/wechat_openid_collector.log`
