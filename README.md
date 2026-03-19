@@ -91,7 +91,6 @@
 在项目目录下创建并使用项目虚拟环境：
 
 ```powershell
-cd D:\Zaoer\OneDrive\Tools\wei-class
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -158,7 +157,6 @@ $env:PUSHPLUS_TOPIC = "可选的群组编码"
 启动主服务：
 
 ```powershell
-cd D:\Zaoer\OneDrive\Tools\wei-class
 .\.venv\Scripts\python.exe web.py --openid-method uiautomation
 ```
 
@@ -175,7 +173,6 @@ cd D:\Zaoer\OneDrive\Tools\wei-class
 ### 1. 安装独立的 mitmproxy 环境
 
 ```powershell
-cd D:\Zaoer\OneDrive\Tools\wei-class
 python -m venv .venv-mitm
 .\.venv-mitm\Scripts\pip.exe install mitmproxy
 ```
@@ -185,7 +182,6 @@ python -m venv .venv-mitm
 第一次使用时，先让 `mitmproxy` 生成证书：
 
 ```powershell
-cd D:\Zaoer\OneDrive\Tools\wei-class
 .\.venv-mitm\Scripts\mitmproxy.exe
 ```
 
@@ -198,7 +194,6 @@ cd D:\Zaoer\OneDrive\Tools\wei-class
 然后导入证书：
 
 ```powershell
-cd D:\Zaoer\OneDrive\Tools\wei-class
 .\install_mitmproxy_cert.ps1
 ```
 
@@ -234,7 +229,6 @@ cd D:\Zaoer\OneDrive\Tools\wei-class
 推荐使用项目提供的脚本：
 
 ```powershell
-cd D:\Zaoer\OneDrive\Tools\wei-class
 .\start_mitmproxy_openid.ps1
 ```
 
@@ -254,8 +248,7 @@ Using upstream proxy: 127.0.0.1:7890
 ### 5. 启动主服务
 
 ```powershell
-cd D:\Zaoer\OneDrive\Tools\wei-class
-$env:WECHAT_CV_MITM_RESULT_PATH = "D:\Zaoer\OneDrive\Tools\wei-class\logs\mitm_openid_result.txt"
+$env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 .\.venv\Scripts\python.exe web.py --openid-method cv
 ```
 
@@ -273,8 +266,7 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "D:\Zaoer\OneDrive\Tools\wei-class\logs\mitm_o
 ### 6. 调试单次采集
 
 ```powershell
-cd D:\Zaoer\OneDrive\Tools\wei-class
-$env:WECHAT_CV_MITM_RESULT_PATH = "D:\Zaoer\OneDrive\Tools\wei-class\logs\mitm_openid_result.txt"
+$env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 .\.venv\Scripts\python.exe wechat_openid_collector.py --method cv --once
 ```
 
