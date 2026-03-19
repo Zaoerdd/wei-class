@@ -26,6 +26,8 @@ SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_SHOWWINDOW = 0x0040
 WM_CLOSE = 0x0010
+VK_LBUTTON = 0x01
+VK_ESCAPE = 0x1B
 
 OPENID_URL_RE = re.compile(r"[?&]openid=([^&#]+)")
 OPENID_JSON_RE = re.compile(r'["\']openid["\']\s*:\s*["\']([^"\']+)["\']', re.IGNORECASE)
@@ -175,6 +177,12 @@ class CVWeChatOpenIdCollector:
             "menu_button": (24, 18),
             "menu_item": (18, 14),
             "close": (10, 10),
+        }
+        self.click_capture_boxes: Dict[str, Tuple[int, int, int, int]] = {
+            "session": (120, 70, 420, 160),
+            "menu_button": (160, 60, 320, 120),
+            "menu_item": (110, 50, 220, 100),
+            "close": (40, 40, 96, 96),
         }
         self._pyautogui = None
         self._cv2 = None
@@ -438,6 +446,60 @@ class CVWeChatOpenIdCollector:
             "saved_templates": saved_templates,
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
+
+    def capture_template_from_user_click(
+        self,
+        role: str,
+        *,
+        target: str = "main",
+        overwrite: bool = True,
+        click_timeout: float = 20.0,
+    ) -> Dict[str, object]:
+        self.logger.info("waiting for user click to capture local template (role=%s, target=%s)", role, target)
+        self._ensure_dependencies()
+
+        if target == "browser":
+            window = self.wait_for_browser_window(timeout=max(4.0, self.browser_delay + 2.0))
+        else:
+            window = self.find_wechat_window()
+        self.activate_window(window)
+
+        output_path = self._local_template_output_path(role)
+        if output_path.exists() and not overwrite:
+            raise OpenIdCollectorError(f"local template already exists, remove it first or allow overwrite: {output_path}")
+
+        deadline = time.monotonic() + max(1.0, click_timeout)
+        was_down = False
+        while time.monotonic() < deadline:
+            if user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000:
+                raise OpenIdCollectorError("模板采集已取消。")
+
+            is_down = bool(user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+            if is_down and not was_down:
+                point = self._get_cursor_position()
+                if self._point_in_rect(point.x, point.y, window.rect):
+                    region = self._build_click_capture_region(role, point.x, point.y, window.rect)
+                    image = self._capture_color_image(region)
+                    self._wait_for_mouse_release()
+                    artifact = self._write_template_artifact(
+                        role,
+                        output_path=output_path,
+                        image=image,
+                        region=region,
+                        capture_source="user-click",
+                        overwrite=overwrite,
+                    )
+                    artifact["click_point"] = {"x": int(point.x), "y": int(point.y)}
+                    artifact["target_window"] = {
+                        "title": window.title,
+                        "class_name": window.class_name,
+                    }
+                    return artifact
+
+            was_down = is_down
+            time.sleep(0.01)
+
+        raise OpenIdCollectorError("等待你的点击超时了，请重新开始这一步。")
 
     def close_browser(self, window: WindowInfo) -> None:
         deadline = time.monotonic() + self.close_timeout
@@ -763,30 +825,53 @@ class CVWeChatOpenIdCollector:
         return current.mtime_ns > baseline.mtime_ns or current.size != baseline.size
 
     def _resolve_template(self, role: str) -> Path:
+        for path in self._iter_template_base_paths(role):
+            return path
+
         filename = self.template_names.get(role)
         if not filename:
             raise OpenIdCollectorError(f"unknown cv template role: {role}")
-        path = Path(filename)
-        if not path.is_absolute():
-            override_path = self.template_override_dir / path.name
-            if override_path.exists():
-                return override_path
-            path = self.template_dir / path
-        if not path.exists():
-            raise OpenIdCollectorError(f"cv template missing for role {role}: {path}")
-        return path
+
+        configured_path = Path(filename)
+        if configured_path.is_absolute():
+            raise OpenIdCollectorError(f"cv template missing for role {role}: {configured_path}")
+
+        override_path = self.template_override_dir / configured_path.name
+        raise OpenIdCollectorError(f"cv template missing for role {role}: {override_path}")
 
     def _iter_template_candidates(self, role: str):
-        base_path = self._resolve_template(role)
         yielded = set()
 
-        for scale in self.template_scales:
-            candidate = self._get_scaled_template(base_path, scale)
-            key = str(candidate).lower()
+        for base_path in self._iter_template_base_paths(role):
+            for scale in self.template_scales:
+                candidate = self._get_scaled_template(base_path, scale)
+                key = str(candidate).lower()
+                if key in yielded:
+                    continue
+                yielded.add(key)
+                yield candidate
+
+    def _iter_template_base_paths(self, role: str):
+        filename = self.template_names.get(role)
+        if not filename:
+            raise OpenIdCollectorError(f"unknown cv template role: {role}")
+
+        configured_path = Path(filename)
+        candidates = []
+        if configured_path.is_absolute():
+            candidates.append(configured_path)
+        else:
+            candidates.append(self.template_override_dir / configured_path.name)
+            candidates.append(self.template_dir / configured_path)
+
+        yielded = set()
+        for path in candidates:
+            key = str(path).lower()
             if key in yielded:
                 continue
             yielded.add(key)
-            yield candidate
+            if path.exists():
+                yield path
 
     def _get_scaled_template(self, path: Path, scale: float) -> Path:
         if abs(scale - 1.0) < 0.001:
@@ -860,27 +945,14 @@ class CVWeChatOpenIdCollector:
         region, capture_source = self._resolve_capture_region(role, window_rect)
         image = self._capture_color_image(region)
 
-        if output_path.exists() and not overwrite:
-            raise OpenIdCollectorError(f"local template already exists, remove it first or allow overwrite: {output_path}")
-
-        self._write_color_image(output_path, image)
-        height, width = image.shape[:2]
-        return {
-            "role": role,
-            "filename": output_path.name,
-            "path": str(output_path),
-            "capture_source": capture_source,
-            "region": {
-                "left": int(region[0]),
-                "top": int(region[1]),
-                "width": int(region[2]),
-                "height": int(region[3]),
-            },
-            "image_size": {
-                "width": int(width),
-                "height": int(height),
-            },
-        }
+        return self._write_template_artifact(
+            role,
+            output_path=output_path,
+            image=image,
+            region=region,
+            capture_source=capture_source,
+            overwrite=overwrite,
+        )
 
     def _resolve_capture_region(self, role: str, window_rect: WindowRect) -> Tuple[Tuple[int, int, int, int], str]:
         match = self.find_template_match(role, window_rect)
@@ -896,6 +968,10 @@ class CVWeChatOpenIdCollector:
         width = int(match.width) + pad_x * 2
         height = int(match.height) + pad_y * 2
         return self._clamp_region((left, top, width, height), window_rect)
+
+    def _build_click_capture_region(self, role: str, x: int, y: int, window_rect: WindowRect) -> Tuple[int, int, int, int]:
+        offset_x, offset_y, width, height = self.click_capture_boxes.get(role, (80, 40, 160, 80))
+        return self._clamp_region((int(x) - offset_x, int(y) - offset_y, width, height), window_rect)
 
     def _clamp_region(
         self,
@@ -919,6 +995,38 @@ class CVWeChatOpenIdCollector:
             raise OpenIdCollectorError("cv matching dependencies are not initialized")
         image = self._capture_screen_image(region)
         return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
+    def _write_template_artifact(
+        self,
+        role: str,
+        *,
+        output_path: Path,
+        image,
+        region: Tuple[int, int, int, int],
+        capture_source: str,
+        overwrite: bool,
+    ) -> Dict[str, object]:
+        if output_path.exists() and not overwrite:
+            raise OpenIdCollectorError(f"local template already exists, remove it first or allow overwrite: {output_path}")
+
+        self._write_color_image(output_path, image)
+        height, width = image.shape[:2]
+        return {
+            "role": role,
+            "filename": output_path.name,
+            "path": str(output_path),
+            "capture_source": capture_source,
+            "region": {
+                "left": int(region[0]),
+                "top": int(region[1]),
+                "width": int(region[2]),
+                "height": int(region[3]),
+            },
+            "image_size": {
+                "width": int(width),
+                "height": int(height),
+            },
+        }
 
     def _write_color_image(self, path: Path, image) -> None:
         cv2 = self._cv2
@@ -976,6 +1084,22 @@ class CVWeChatOpenIdCollector:
         if image.size == 0:
             raise OpenIdCollectorError("screen grab returned an empty image")
         return image
+
+    def _get_cursor_position(self):
+        point = ctypes.wintypes.POINT()
+        if not user32.GetCursorPos(ctypes.byref(point)):
+            raise OpenIdCollectorError("failed to read current cursor position")
+        return point
+
+    def _point_in_rect(self, x: int, y: int, rect: WindowRect) -> bool:
+        return rect.left <= x <= rect.right and rect.top <= y <= rect.bottom
+
+    def _wait_for_mouse_release(self) -> None:
+        deadline = time.monotonic() + 1.5
+        while user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000:
+            if time.monotonic() > deadline:
+                return
+            time.sleep(0.01)
 
     def _get_window_text(self, hwnd: int) -> str:
         length = user32.GetWindowTextLengthW(hwnd)

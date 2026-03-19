@@ -4,7 +4,10 @@ const healthState = {
     lastReport: null,
     templateCapture: {
         busy: false,
-        outcome: null,
+        started: false,
+        stepIndex: 0,
+        completedSteps: [],
+        errorMessage: null,
     },
 };
 
@@ -151,6 +154,31 @@ function templateCaptureSourceLabel(source) {
         return "按窗口区域兜底截图";
     }
     return "自动截图";
+}
+
+function buildTemplateCaptureSteps() {
+    return [
+        {
+            role: "session",
+            title: "点击左侧微助教会话",
+            instruction: "先切到别的聊天页，但左侧仍能看到“微助教服务号”，然后点会话文字中间。程序会在你按下鼠标时立即截取 session 模板，并顺手进入聊天页。",
+        },
+        {
+            role: "menu_button",
+            title: "点击底部学生按钮",
+            instruction: "回到浏览器点“等待本步点击”后，程序会把微信切到前台。然后去微信底部点击“学生(S)”按钮中间。",
+        },
+        {
+            role: "menu_item",
+            title: "点击弹出菜单里的全部",
+            instruction: "再回到浏览器继续下一步，然后去微信弹出菜单里点击“全部(A)”中间。",
+        },
+        {
+            role: "close",
+            title: "点击微信内置浏览器关闭按钮",
+            instruction: "等微信内置浏览器打开后，再回到浏览器点下一步，然后去微信右上角点击关闭按钮。",
+        },
+    ];
 }
 
 function renderBanner(report) {
@@ -343,51 +371,98 @@ function renderTemplateCapture(report) {
     const method = summary.collector_method;
     const captureState = healthState.templateCapture;
     const supported = method === "cv";
-    const openButton = $("template-capture-open-btn");
-    const visibleButton = $("template-capture-visible-btn");
+    const steps = buildTemplateCaptureSteps();
+    const currentStep = captureState.started && captureState.stepIndex < steps.length
+        ? steps[captureState.stepIndex]
+        : null;
+    const finished = captureState.started && captureState.stepIndex >= steps.length;
+    const startButton = $("template-capture-start-btn");
+    const stepButton = $("template-capture-step-btn");
+    const resetButton = $("template-capture-reset-btn");
+    const stepsContainer = $("health-template-capture-steps");
     const pill = $("health-template-capture-pill");
     const status = $("health-template-capture-status");
     const results = $("health-template-capture-results");
 
-    openButton.disabled = captureState.busy || !supported;
-    visibleButton.disabled = captureState.busy || !supported;
-    openButton.textContent = captureState.busy ? "正在采集..." : "已经在聊天页，开始采集";
-    visibleButton.textContent = captureState.busy ? "正在采集..." : "只在左侧可见，帮我点开后采集";
+    startButton.disabled = captureState.busy || !supported;
+    stepButton.disabled = captureState.busy || !supported || !currentStep;
+    resetButton.disabled = captureState.busy || !supported || (!captureState.started && !captureState.completedSteps.length);
+    stepButton.textContent = captureState.busy
+        ? "正在等待这一步点击..."
+        : currentStep
+            ? `等待第 ${captureState.stepIndex + 1} 步点击`
+            : "等待本步点击";
 
-    let outcome = captureState.outcome;
+    stepsContainer.innerHTML = steps.map((step, index) => {
+        let stateClass = "todo";
+        let stateLabel = "待完成";
+        if (index < captureState.stepIndex) {
+            stateClass = "done";
+            stateLabel = "已完成";
+        } else if (currentStep && index === captureState.stepIndex) {
+            stateClass = captureState.busy ? "active" : "current";
+            stateLabel = captureState.busy ? "等待点击" : "当前步骤";
+        }
+        return `
+            <article class="capture-step-item capture-step-item--${stateClass}">
+                <div class="capture-step-top">
+                    <strong>第 ${index + 1} 步</strong>
+                    <span>${stateLabel}</span>
+                </div>
+                <h3>${escapeHtml(step.title)}</h3>
+                <p>${escapeHtml(step.instruction)}</p>
+            </article>
+        `;
+    }).join("");
+
+    let tone = "idle";
+    let title = "尚未开始点击确认向导";
+    let message = "点击“开始点击确认向导”后，页面会按顺序指导你在微信里完成 4 次点击。";
+
     if (!supported) {
-        outcome = {
-            tone: "idle",
-            pill: "不可用",
-            title: "当前不是 cv 模式",
-            message: "只有新版微信的 cv 模式才需要自动采集本机模板。",
-            results: [],
-        };
-    } else if (!outcome) {
-        outcome = {
-            tone: "idle",
-            pill: "待开始",
-            title: "尚未开始自动采集",
-            message: "确认微信窗口可见后，再选择当前所处状态开始采集。",
-            results: [],
-        };
+        pill.textContent = "不可用";
+        tone = "idle";
+        title = "当前不是 cv 模式";
+        message = "只有新版微信的 cv 模式才需要点击确认式模板采集向导。";
+    } else if (captureState.busy && currentStep) {
+        pill.textContent = "等待点击";
+        tone = "warning";
+        title = `正在等待第 ${captureState.stepIndex + 1} 步点击`;
+        message = `${currentStep.title}。程序已经把微信切到前台，现在直接去微信里点一下目标即可。`;
+    } else if (captureState.errorMessage && currentStep) {
+        pill.textContent = "需重试";
+        tone = "danger";
+        title = `${currentStep.title} 这一步还没成功`;
+        message = captureState.errorMessage;
+    } else if (finished) {
+        pill.textContent = "已完成";
+        tone = "success";
+        title = "4 步模板采集已完成";
+        message = "现在可以直接看下面的预览结果，也可以回到上面的模板状态区确认全部模板已经变成本机覆盖。";
+    } else if (currentStep) {
+        pill.textContent = "进行中";
+        tone = "warning";
+        title = currentStep.title;
+        message = currentStep.instruction;
+    } else {
+        pill.textContent = "待开始";
     }
 
-    pill.textContent = outcome.pill || "待开始";
-    status.className = `capture-status capture-status--${outcome.tone || "idle"}`;
+    status.className = `capture-status capture-status--${tone}`;
     status.innerHTML = `
-        <strong>${escapeHtml(safeText(outcome.title, "自动采集本机模板"))}</strong>
-        <p>${escapeHtml(safeText(outcome.message, "等待开始"))}</p>
+        <strong>${escapeHtml(safeText(title, "点击确认式模板采集向导"))}</strong>
+        <p>${escapeHtml(safeText(message, "等待开始"))}</p>
     `;
 
-    if (Array.isArray(outcome.results) && outcome.results.length) {
+    if (Array.isArray(captureState.completedSteps) && captureState.completedSteps.length) {
         results.className = "capture-result-list";
-        results.innerHTML = outcome.results.map((item) => {
+        results.innerHTML = captureState.completedSteps.map((item) => {
             const size = item.image_size || {};
             const width = size.width || "-";
             const height = size.height || "-";
             return `
                 <article class="capture-result-card">
+                    ${item.preview_url ? `<img class="capture-preview" src="${escapeHtml(item.preview_url)}" alt="${escapeHtml(templateRoleLabel(item.role))} 预览">` : ""}
                     <div>
                         <p class="panel-eyebrow">模板角色</p>
                         <h3>${escapeHtml(templateRoleLabel(item.role))}</h3>
@@ -438,8 +513,9 @@ function renderLoadError(message) {
             <p>${escapeHtml(message)}</p>
         </div>
     `;
-    $("template-capture-open-btn").disabled = true;
-    $("template-capture-visible-btn").disabled = true;
+    $("template-capture-start-btn").disabled = true;
+    $("template-capture-step-btn").disabled = true;
+    $("template-capture-reset-btn").disabled = true;
     $("health-template-capture-pill").textContent = "不可用";
     $("health-template-capture-status").className = "capture-status capture-status--danger";
     $("health-template-capture-status").innerHTML = `
@@ -528,35 +604,62 @@ async function exportSupportBundle() {
     }
 }
 
-function updateTemplateCaptureOutcome(outcome) {
-    healthState.templateCapture.outcome = outcome;
+function syncTemplateStatusFromCapture(report) {
+    if (!healthState.lastReport || !report || !report.template_status) {
+        return;
+    }
+    healthState.lastReport.template_status = report.template_status;
+}
+
+function startTemplateCaptureWizard() {
+    healthState.templateCapture.started = true;
+    healthState.templateCapture.stepIndex = 0;
+    healthState.templateCapture.completedSteps = [];
+    healthState.templateCapture.errorMessage = null;
     if (healthState.lastReport) {
         renderTemplateCapture(healthState.lastReport);
     }
 }
 
-async function runTemplateCapture(chatState) {
+function resetTemplateCaptureWizard() {
+    healthState.templateCapture.busy = false;
+    healthState.templateCapture.started = false;
+    healthState.templateCapture.stepIndex = 0;
+    healthState.templateCapture.completedSteps = [];
+    healthState.templateCapture.errorMessage = null;
+    if (healthState.lastReport) {
+        renderTemplateCapture(healthState.lastReport);
+    }
+}
+
+async function runTemplateCaptureWizardStep() {
     if (healthState.templateCapture.busy) {
+        return;
+    }
+    if (!healthState.templateCapture.started) {
+        startTemplateCaptureWizard();
+    }
+
+    const steps = buildTemplateCaptureSteps();
+    const currentStep = steps[healthState.templateCapture.stepIndex];
+    if (!currentStep) {
         return;
     }
 
     healthState.templateCapture.busy = true;
-    updateTemplateCaptureOutcome({
-        tone: "warning",
-        pill: "采集中",
-        title: "正在自动采集本机模板",
-        message: "请保持微信窗口可见，不要手动切换聊天页或最小化微信。",
-        results: [],
-    });
+    healthState.templateCapture.errorMessage = null;
+    if (healthState.lastReport) {
+        renderTemplateCapture(healthState.lastReport);
+    }
 
     try {
-        const response = await fetch("/api/template_capture", {
+        const response = await fetch("/api/template_capture_click", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                chat_state: chatState,
+                role: currentStep.role,
                 overwrite: true,
             }),
         });
@@ -566,25 +669,14 @@ async function runTemplateCapture(chatState) {
         }
 
         const capture = payload.capture || {};
-        updateTemplateCaptureOutcome({
-            tone: "success",
-            pill: "已完成",
-            title: "本机模板采集完成",
-            message: safeText(payload.message, "现在可以回到上面的模板状态区确认结果。"),
-            results: Array.isArray(capture.saved_templates) ? capture.saved_templates : [],
-        });
+        healthState.templateCapture.completedSteps.push(capture);
+        healthState.templateCapture.stepIndex += 1;
+        syncTemplateStatusFromCapture(payload);
         await fetchHealth();
     } catch (error) {
-        const message = error instanceof Error
+        healthState.templateCapture.errorMessage = error instanceof Error
             ? error.message
-            : "自动采集本机模板失败，请先检查微信窗口和当前聊天页状态。";
-        updateTemplateCaptureOutcome({
-            tone: "danger",
-            pill: "失败",
-            title: "本机模板采集失败",
-            message,
-            results: [],
-        });
+            : "点击确认式模板采集失败，请先检查微信窗口和当前聊天页状态。";
     } finally {
         healthState.templateCapture.busy = false;
         if (healthState.lastReport) {
@@ -596,8 +688,9 @@ async function runTemplateCapture(chatState) {
 function bindEvents() {
     $("health-refresh-btn").addEventListener("click", () => fetchHealth());
     $("health-export-btn").addEventListener("click", () => exportSupportBundle());
-    $("template-capture-open-btn").addEventListener("click", () => runTemplateCapture("open"));
-    $("template-capture-visible-btn").addEventListener("click", () => runTemplateCapture("visible"));
+    $("template-capture-start-btn").addEventListener("click", () => startTemplateCaptureWizard());
+    $("template-capture-step-btn").addEventListener("click", () => runTemplateCaptureWizardStep());
+    $("template-capture-reset-btn").addEventListener("click", () => resetTemplateCaptureWizard());
 }
 
 function startPolling() {
