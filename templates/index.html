@@ -3,1408 +3,166 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>云端签到助手</title>
-    <script src="{{ url_for('static', filename='qrcode.min.js') }}"></script>
-    <style>
-        :root {
-            --bg-color: #f0f2f5;
-            --text-color: #333;
-            --card-bg: white;
-            --card-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            --primary-color: #1a73e8;
-            --primary-hover: #1557b0;
-            --border-color: #ddd;
-            --success-bg: #d4edda;
-            --success-color: #155724;
-            --warning-bg: #fff3cd;
-            --warning-color: #856404;
-        }
-
-        body.dark-theme {
-            --bg-color: #121212;
-            --text-color: #e0e0e0;
-            --card-bg: #1e1e1e;
-            --card-shadow: 0 4px 6px rgba(0,0,0,0.2);
-            --primary-color: #1976d2;
-            --primary-hover: #1565c0;
-            --border-color: #444;
-            --success-bg: #1b5e20;
-            --success-color: #c8e6c9;
-            --warning-bg: #f57c00;
-            --warning-color: #ffe0b2;
-        }
-
-        body {
-            font-family: 'Segoe UI', sans-serif;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-            background: var(--bg-color);
-            color: var(--text-color);
-            transition: background 0.3s, color 0.3s;
-        }
-        .card {
-            background: var(--card-bg);
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: var(--card-shadow);
-            margin-bottom: 20px;
-            transition: all 0.3s ease;
-        }
-        h1, h2 {
-            text-align: center;
-            color: var(--primary-color);
-            margin-top: 0;
-        }
-
-        input[type="text"] {
-            width: 100%;
-            padding: 12px;
-            margin: 10px 0;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            box-sizing: border-box;
-            background: var(--card-bg);
-            color: var(--text-color);
-        }
-        button {
-            width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 16px;
-            transition: background 0.3s;
-        }
-        .btn-primary {
-            background: var(--primary-color);
-            color: white;
-        }
-        .btn-primary:hover {
-            background: var(--primary-hover);
-        }
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
-            margin-top: 10px;
-        }
-        .btn-secondary:hover {
-            background: #545b62;
-        }
-        .btn-danger {
-            background: #dc3545;
-            color: white;
-            margin-top: 10px;
-        }
-
-        .status-box {
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-            font-weight: bold;
-            margin: 20px 0;
-        }
-        .waiting {
-            background: var(--warning-bg);
-            color: var(--warning-color);
-            border: 1px solid var(--warning-bg);
-        }
-        .success {
-            background: var(--success-bg);
-            color: var(--success-color);
-            border: 1px solid var(--success-bg);
-        }
-        .error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-
-        .settings {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .hidden {
-            display: none !important;
-        }
-        .spinner {
-            display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid rgba(0,0,0,0.1);
-            border-left-color: var(--primary-color);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-right: 8px;
-            vertical-align: middle;
-        }
-        @keyframes spin {
-            100% { transform: rotate(360deg); }
-        }
-
-        #qr-display-area {
-            text-align: center;
-            margin-top: 20px;
-            padding: 16px 0 0;
-        }
-        .qr-panel {
-            display: inline-flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 14px;
-            background: #ffffff;
-            padding: 18px;
-            border-radius: 28px;
-            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
-        }
-        #qrcode {
-            display: inline-block;
-            margin: 0 auto;
-            line-height: 0;
-        }
-        .qr-link {
-            color: var(--primary-color);
-            font-size: 0.95em;
-            display: inline-block;
-            text-decoration: none;
-            font-weight: 600;
-        }
-        .qr-link:hover {
-            text-decoration: underline;
-        }
-        .qr-tip {
-            margin-top: 12px;
-            color: #666;
-            font-size: 0.88em;
-        }
-
-        /* 主题切换按钮 */
-        .theme-toggle {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            z-index: 1000;
-            transition: all 0.3s;
-        }
-        .theme-toggle:hover {
-            transform: scale(1.1);
-        }
-        .theme-toggle svg {
-            width: 20px;
-            height: 20px;
-            fill: var(--text-color);
-        }
-
-        /* 使用说明卡片 */
-        .usage-card {
-            background: var(--card-bg);
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: var(--card-shadow);
-            margin-bottom: 20px;
-            text-align: center;
-            border-left: 4px solid var(--primary-color);
-        }
-        .usage-card h3 {
-            margin-top: 0;
-            color: var(--primary-color);
-        }
-        .usage-card p {
-            margin-bottom: 15px;
-            color: var(--text-color);
-        }
-        .usage-link {
-            display: inline-block;
-            padding: 8px 16px;
-            background: var(--primary-color);
-            color: white;
-            text-decoration: none;
-            border-radius: 6px;
-            transition: background 0.3s;
-        }
-        .usage-link:hover {
-            background: var(--primary-hover);
-        }
-
-        /* 新增：输入提示样式 */
-        .input-hint {
-            font-size: 0.85em;
-            color: #666;
-            margin-top: 5px;
-            margin-bottom: 15px;
-        }
-        .input-hint code {
-            background: rgba(0,0,0,0.05);
-            padding: 2px 4px;
-            border-radius: 3px;
-            font-family: monospace;
-        }
-        .info-card {
-            margin-top: 18px;
-            padding: 18px;
-            border-radius: 12px;
-            background: rgba(26, 115, 232, 0.06);
-            border: 1px solid rgba(26, 115, 232, 0.12);
-        }
-        .info-card h3 {
-            margin: 0 0 14px;
-            color: var(--primary-color);
-            font-size: 1rem;
-            text-align: left;
-        }
-        details.info-card summary {
-            cursor: pointer;
-            font-weight: 700;
-            color: var(--primary-color);
-            outline: none;
-        }
-        details.info-card[open] summary {
-            margin-bottom: 14px;
-        }
-        .meta-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-        }
-        .meta-item {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            padding: 10px 12px;
-            border-radius: 10px;
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-        }
-        .meta-label {
-            font-size: 0.82rem;
-            color: #666;
-        }
-        .meta-value {
-            font-size: 0.96rem;
-            font-weight: 600;
-            word-break: break-word;
-        }
-        .debug-json {
-            margin: 14px 0 0;
-            padding: 12px;
-            border-radius: 10px;
-            background: rgba(0, 0, 0, 0.06);
-            border: 1px solid var(--border-color);
-            overflow: auto;
-            white-space: pre-wrap;
-            word-break: break-word;
-            font-size: 0.84rem;
-            line-height: 1.45;
-        }
-        .section-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            margin-bottom: 14px;
-        }
-        .section-header h3 {
-            margin: 0;
-        }
-        .count-badge {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 56px;
-            padding: 6px 10px;
-            border-radius: 999px;
-            background: rgba(21, 87, 36, 0.12);
-            color: var(--success-color);
-            font-size: 0.84rem;
-            font-weight: 700;
-        }
-        .student-empty {
-            padding: 14px;
-            border-radius: 10px;
-            border: 1px dashed var(--border-color);
-            color: #666;
-            text-align: center;
-            background: rgba(26, 115, 232, 0.04);
-        }
-        .student-list {
-            display: grid;
-            gap: 12px;
-        }
-        .student-row {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px;
-            border-radius: 12px;
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-        }
-        .student-avatar {
-            width: 44px;
-            height: 44px;
-            border-radius: 50%;
-            object-fit: cover;
-            flex-shrink: 0;
-            background: rgba(0, 0, 0, 0.06);
-        }
-        .student-main {
-            min-width: 0;
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-        .student-title {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-        }
-        .student-name {
-            min-width: 0;
-            font-size: 0.98rem;
-            font-weight: 700;
-            word-break: break-word;
-        }
-        .student-rank {
-            flex-shrink: 0;
-            padding: 4px 10px;
-            border-radius: 999px;
-            background: rgba(26, 115, 232, 0.12);
-            color: var(--primary-color);
-            font-size: 0.82rem;
-            font-weight: 700;
-        }
-        .student-number {
-            color: #666;
-            font-size: 0.88rem;
-            word-break: break-word;
-        }
-        .student-meta {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        .student-tag {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 8px;
-            border-radius: 999px;
-            background: rgba(26, 115, 232, 0.08);
-            color: var(--text-color);
-            font-size: 0.78rem;
-            line-height: 1;
-        }
-        .student-tag.success {
-            background: rgba(21, 87, 36, 0.12);
-            color: var(--success-color);
-        }
-        .student-tag.warning {
-            background: rgba(245, 124, 0, 0.14);
-            color: #b85d00;
-        }
-        @media (max-width: 520px) {
-            .meta-grid {
-                grid-template-columns: 1fr;
-            }
-            .student-row {
-                align-items: flex-start;
-            }
-            .student-title {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            .section-header {
-                align-items: flex-start;
-                flex-direction: column;
-            }
-        }
-    </style>
+    <title>微助教签到助手</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+    <script defer src="{{ url_for('static', filename='qrcode.min.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='app.js') }}"></script>
 </head>
-<body>
+<body data-page="home">
+    <div class="page-shell">
+        <header class="hero-card reveal">
+            <div class="hero-copy">
+                <p class="eyebrow">WEI CLASS ASSISTANT</p>
+                <h1>签到助手，双击就能用</h1>
+                <p class="hero-description">
+                    默认自动获取 OpenID 并持续监听签到任务。即使不熟悉命令行，也可以直接双击仓库里的
+                    <code>一键启动.bat</code> 打开服务。
+                </p>
+                <div class="hero-actions">
+                    <button class="btn btn-primary" id="refresh-btn" type="button">立即刷新状态</button>
+                    <a class="btn btn-secondary" href="/usage">查看新手说明</a>
+                </div>
+                <div class="quick-steps">
+                    <span>1. 双击 <code>一键启动.bat</code></span>
+                    <span>2. 保持微信和微助教窗口可见</span>
+                    <span>3. 页面会自动刷新并处理签到</span>
+                </div>
+            </div>
+            <aside class="hero-panel">
+                <span class="state-pill state-pill--idle" id="overall-pill">准备中</span>
+                <h2 id="overall-title">正在连接本地服务</h2>
+                <p id="overall-description">首次运行会自动安装依赖，完成后会自行进入待命状态。</p>
+                <div class="hero-metrics">
+                    <div>
+                        <span>OpenID 获取方式</span>
+                        <strong id="collector-method">检测中</strong>
+                    </div>
+                    <div>
+                        <span>当前来源</span>
+                        <strong id="openid-source">等待中</strong>
+                    </div>
+                    <div>
+                        <span>最近刷新</span>
+                        <strong id="refresh-time">-</strong>
+                    </div>
+                </div>
+            </aside>
+        </header>
 
-    <!-- 主题切换按钮 -->
-    <div class="theme-toggle" onclick="toggleTheme()">
-        <svg id="theme-icon" viewBox="0 0 24 24">
-            <!-- 默认显示太阳图标（浅色主题） -->
-            <path id="sun-icon" d="M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5S14.76,7,12,7zM12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35,3-3S10.35,9,12,9zM12,2L9,5l3,3l3-3L12,2zM12,22l-3-3l3-3l3,3L12,22zM2,12l3-3l3,3l-3,3L2,12zM22,12l-3,3l-3-3l3-3L22,12z"/>
-            <!-- 月亮图标默认隐藏 -->
-            <path id="moon-icon" d="M9 2c-1.05 0-2.05.16-3 .46 4.06 1.27 7 5.06 7 9.54 0 4.48-2.94 8.27-7 9.54.95.3 1.95.46 3 .46 5.52 0 10-4.48 10-10S14.52 2 9 2z" style="display: none;"/>
-        </svg>
+        <section class="notice-banner hidden reveal" id="notice-banner" aria-live="polite"></section>
+
+        <section class="overview-grid reveal" aria-label="概览">
+            <article class="overview-card">
+                <span class="overview-label">OpenID</span>
+                <strong class="overview-value" id="openid-summary">等待自动获取</strong>
+                <p class="overview-note" id="openid-note">如果自动获取失败，可以在下方手动粘贴。</p>
+            </article>
+            <article class="overview-card">
+                <span class="overview-label">当前用户</span>
+                <strong class="overview-value" id="profile-summary">尚未识别</strong>
+                <p class="overview-note" id="profile-note">登录后会显示姓名、班级和学号。</p>
+            </article>
+            <article class="overview-card">
+                <span class="overview-label">签到任务</span>
+                <strong class="overview-value" id="task-summary">暂无任务</strong>
+                <p class="overview-note" id="task-note">发现任务后会自动刷新到这里。</p>
+            </article>
+            <article class="overview-card">
+                <span class="overview-label">处理结果</span>
+                <strong class="overview-value" id="result-summary">等待中</strong>
+                <p class="overview-note" id="result-note">二维码、自动签到和异常提示都会集中展示。</p>
+            </article>
+        </section>
+
+        <section class="panel reveal" aria-labelledby="timeline-title">
+            <div class="panel-heading">
+                <div>
+                    <p class="panel-eyebrow">流程进度</p>
+                    <h2 id="timeline-title">当前自动化阶段</h2>
+                </div>
+            </div>
+            <div class="timeline" id="timeline"></div>
+        </section>
+
+        <section class="content-grid">
+            <article class="panel panel-main reveal" aria-labelledby="task-list-title">
+                <div class="panel-heading">
+                    <div>
+                        <p class="panel-eyebrow">签到任务</p>
+                        <h2 id="task-list-title">当前任务列表</h2>
+                    </div>
+                    <span class="panel-badge" id="task-count-badge">0 个任务</span>
+                </div>
+                <div class="card-stack" id="active-signs"></div>
+            </article>
+
+            <article class="panel reveal" aria-labelledby="result-title">
+                <div class="panel-heading">
+                    <div>
+                        <p class="panel-eyebrow">结果面板</p>
+                        <h2 id="result-title">二维码与执行结果</h2>
+                    </div>
+                </div>
+                <div class="result-panel" id="result-panel">
+                    <div class="empty-state">
+                        <strong>还没有可展示的结果</strong>
+                        <p>检测到二维码签到后，这里会直接生成可扫码的二维码。</p>
+                    </div>
+                </div>
+            </article>
+
+            <article class="panel reveal" aria-labelledby="manual-title">
+                <div class="panel-heading">
+                    <div>
+                        <p class="panel-eyebrow">手动兜底</p>
+                        <h2 id="manual-title">不会操作命令行也能补救</h2>
+                    </div>
+                </div>
+                <form class="manual-form" id="manual-form">
+                    <label for="openid-input">粘贴 OpenID 或完整链接</label>
+                    <input
+                        id="openid-input"
+                        name="openid"
+                        type="text"
+                        autocomplete="off"
+                        placeholder="支持 32 位 OpenID，或粘贴带 openid= 的完整链接"
+                    >
+                    <p class="form-hint">
+                        自动模式优先，只有自动获取失败或你想临时切换账号时，才需要手动输入。
+                    </p>
+                    <div class="form-actions">
+                        <button class="btn btn-primary" id="manual-submit" type="submit">手动启用这个 OpenID</button>
+                        <button class="btn btn-secondary hidden" id="logout-btn" type="button">停止当前自动监听</button>
+                    </div>
+                    <p class="form-feedback" id="manual-feedback" aria-live="polite"></p>
+                </form>
+            </article>
+
+            <article class="panel reveal" aria-labelledby="runtime-title">
+                <div class="panel-heading">
+                    <div>
+                        <p class="panel-eyebrow">运行信息</p>
+                        <h2 id="runtime-title">排查时最常用的状态</h2>
+                    </div>
+                </div>
+                <dl class="detail-list" id="runtime-details"></dl>
+            </article>
+        </section>
+
+        <section class="panel reveal" aria-labelledby="signed-title">
+            <div class="panel-heading">
+                <div>
+                    <p class="panel-eyebrow">签到明细</p>
+                    <h2 id="signed-title">已识别的签到成员</h2>
+                </div>
+            </div>
+            <div class="student-list" id="signed-students">
+                <div class="empty-state">
+                    <strong>暂无签到成员数据</strong>
+                    <p>如果当前任务支持返回签到名单，这里会自动按顺序显示。</p>
+                </div>
+            </div>
+        </section>
     </div>
-
-    <!-- 使用说明卡片 -->
-    <div class="usage-card">
-        <h3>如何使用？</h3>
-        <p>支持输入OpenID或包含OpenID的URL，系统会自动提取OpenID</p>
-        <a href="usage" class="usage-link" target="_blank">查看使用说明</a>
-    </div>
-
-    <div id="login-view" class="card hidden">
-        <h1>用户登录</h1>
-        <p style="text-align:center; color:#666; font-size:0.9em;">请输入您的 OpenID 或包含OpenID的URL</p>
-        <input type="text" id="openid-input" placeholder="输入openid或含openid的url" />
-        <div class="input-hint">
-            支持格式：纯OpenID字符串 或 包含openid参数的URL
-        </div>
-        <button onclick="performLogin()" class="btn-primary" id="login-btn">开始监听</button>
-        <div id="login-msg" style="color: red; text-align: center; margin-top: 10px;"></div>
-    </div>
-
-    <div id="dashboard-view" class="card hidden">
-        <h2>正在监听中</h2>
-        <p style="text-align: center;">当前用户: <span id="current-user" style="font-family: monospace;"></span></p>
-
-        <div id="status-box" class="status-box waiting">
-            <span class="spinner"></span>
-            <span id="status-text">初始化中...</span>
-        </div>
-
-        <div id="profile-card" class="info-card hidden">
-            <h3>个人身份信息</h3>
-            <div class="meta-grid">
-                <div class="meta-item">
-                    <span class="meta-label">姓名</span>
-                    <span id="profile-name" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">学号</span>
-                    <span id="profile-student-number" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">班级</span>
-                    <span id="profile-class-name" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">学院</span>
-                    <span id="profile-department-name" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">学校</span>
-                    <span id="profile-college-name" class="meta-value">-</span>
-                </div>
-            </div>
-        </div>
-
-        <div id="sign-meta-card" class="info-card hidden">
-            <h3>签到结果元数据</h3>
-            <div class="meta-grid">
-                <div class="meta-item">
-                    <span class="meta-label">当前任务</span>
-                    <span id="sign-name" class="meta-value">暂无活跃签到</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">签到类型</span>
-                    <span id="sign-type" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">课程 ID</span>
-                    <span id="sign-course-id" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">签到 ID</span>
-                    <span id="sign-sign-id" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">活跃签到数</span>
-                    <span id="sign-count" class="meta-value">0</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">二维码状态</span>
-                    <span id="sign-qr-status" class="meta-value">等待获取</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">状态消息</span>
-                    <span id="sign-status-message" class="meta-value">初始化中...</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">签到结果</span>
-                    <span id="sign-result-text" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">签到排名</span>
-                    <span id="sign-rank" class="meta-value">-</span>
-                </div>
-            </div>
-        </div>
-
-        <div id="signed-students-card" class="info-card hidden">
-            <div class="section-header">
-                <h3>已签到学生</h3>
-                <span id="signed-students-count" class="count-badge">0 人</span>
-            </div>
-            <div id="signed-students-empty" class="student-empty hidden">暂未收到已签到学生信息</div>
-            <div id="signed-students-list" class="student-list"></div>
-        </div>
-
-        <details id="faye-debug-card" class="info-card hidden">
-            <summary>Faye 调试信息</summary>
-            <div class="meta-grid">
-                <div class="meta-item">
-                    <span class="meta-label">最近通道</span>
-                    <span id="faye-channel" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">订阅目标</span>
-                    <span id="faye-subscription" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">事件类型</span>
-                    <span id="faye-event-kind" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">data.type</span>
-                    <span id="faye-data-type" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">successful</span>
-                    <span id="faye-successful" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">innerFayeToken</span>
-                    <span id="faye-inner-token" class="meta-value">-</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">历史条数</span>
-                    <span id="faye-history-count" class="meta-value">0</span>
-                </div>
-                <div class="meta-item">
-                    <span class="meta-label">成功订阅</span>
-                    <span id="faye-subscriptions" class="meta-value">-</span>
-                </div>
-            </div>
-            <pre id="faye-raw-json" class="debug-json">-</pre>
-        </details>
-
-        <div id="qr-display-area" class="hidden">
-            <div><strong>扫描下方二维码签到</strong></div>
-            <div class="qr-panel">
-                <div id="qrcode"></div>
-                <a id="qr-link-text" class="qr-link" href="#" target="_blank">打开签到链接</a>
-            </div>
-            <div class="qr-tip">非微信环境建议直接扫码或截图到微信识别</div>
-        </div>
-
-        <div class="settings">
-            <label for="auto-redirect-check" style="cursor: pointer;">
-                <input type="checkbox" id="auto-redirect-check" onchange="saveSettings()">
-                检测成功后自动跳转（微信网页中可用）
-            </label>
-        </div>
-
-        <button onclick="performLogout()" class="btn-danger">退出登录</button>
-    </div>
-
-    <script>
-        // 主题管理
-        function initTheme() {
-            const savedTheme = localStorage.getItem('theme') || 'light';
-            if (savedTheme === 'dark') {
-                document.body.classList.add('dark-theme');
-                document.getElementById('sun-icon').style.display = 'none';
-                document.getElementById('moon-icon').style.display = 'block';
-            }
-        }
-
-        function toggleTheme() {
-            const body = document.body;
-            const sunIcon = document.getElementById('sun-icon');
-            const moonIcon = document.getElementById('moon-icon');
-            
-            if (body.classList.contains('dark-theme')) {
-                // 切换到浅色主题
-                body.classList.remove('dark-theme');
-                sunIcon.style.display = 'block';
-                moonIcon.style.display = 'none';
-                localStorage.setItem('theme', 'light');
-            } else {
-                // 切换到深色主题
-                body.classList.add('dark-theme');
-                sunIcon.style.display = 'none';
-                moonIcon.style.display = 'block';
-                localStorage.setItem('theme', 'dark');
-            }
-        }
-
-        function setCookie(name, value, days) {
-            let expires = "";
-            if (days) {
-                let date = new Date();
-                date.setTime(date.getTime() + (days*24*60*60*1000));
-                expires = "; expires=" + date.toUTCString();
-            }
-            document.cookie = name + "=" + (value || "")  + expires + "; path=/";
-        }
-        function getCookie(name) {
-            let nameEQ = name + "=";
-            let ca = document.cookie.split(';');
-            for(let i=0;i < ca.length;i++) {
-                let c = ca[i];
-                while (c.charAt(0)==' ') c = c.substring(1,c.length);
-                if (c.indexOf(nameEQ) == 0) return c.substring(nameEQ.length,c.length);
-            }
-            return null;
-        }
-
-        // 新增：从URL中提取openid的函数
-        function extractOpenIdFromUrl(input) {
-            // 如果输入看起来像URL，尝试提取openid参数
-            if (input.includes('://') || input.includes('openid=') || input.includes('?') || input.includes('&')) {
-                try {
-                    // 尝试解析URL
-                    let url;
-                    if (input.startsWith('http')) {
-                        url = new URL(input);
-                    } else {
-                        // 如果不是完整的URL，尝试添加协议前缀
-                        url = new URL('https://' + input);
-                    }
-                    
-                    // 从URL参数中获取openid
-                    const openid = url.searchParams.get('openid');
-                    if (openid && openid.trim().length > 0) {
-                        return openid.trim();
-                    }
-                    
-                    // 如果URL中已经有openid参数但没有值，尝试从路径或哈希中提取
-                    const regex = /openid=([a-fA-F0-9]+)/g;
-                    const matches = input.match(regex);
-                    if (matches && matches.length > 0) {
-                        const lastMatch = matches[matches.length - 1];
-                        return lastMatch.split('=')[1];
-                    }
-                } catch (e) {
-                    console.log("URL解析失败，尝试直接匹配:", e);
-                    // 尝试直接正则匹配openid参数
-                    const regex = /openid=([a-fA-F0-9]+)/g;
-                    const matches = input.match(regex);
-                    if (matches && matches.length > 0) {
-                        const lastMatch = matches[matches.length - 1];
-                        return lastMatch.split('=')[1];
-                    }
-                }
-            }
-            
-            // 如果不是URL或者提取失败，返回原始值（可能是纯openid）
-            return input.trim();
-        }
-
-        let pollingInterval = null;
-        let isFirstPoll = true;
-        let currentQrUrl = null;
-        let audioContext = null;
-        let signAlertLoopTimer = null;
-        let signAlertLoopRunning = false;
-        let activeAlertSignKey = null;
-        let pendingAlertSignKey = null;
-        const signAlertIntervalMs = 1000;
-
-        function isWeChatEnvironment() {
-            return /micromessenger/i.test(navigator.userAgent);
-        }
-
-        function getAudioContext() {
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContextClass) {
-                return null;
-            }
-
-            if (!audioContext) {
-                audioContext = new AudioContextClass();
-            }
-
-            return audioContext;
-        }
-
-        function getSignTaskKey(data) {
-            const payload = data && typeof data === 'object' ? data : {};
-            const currentSign = payload.current_sign || null;
-            const resultMeta = payload.result_meta || {};
-            const activeSignCount = Number(payload.active_sign_count ?? 0);
-            const courseId = currentSign ? currentSign.courseId : resultMeta.course_id;
-            const signId = currentSign ? currentSign.signId : resultMeta.sign_id;
-
-            if (activeSignCount <= 0 || courseId === undefined || courseId === null || signId === undefined || signId === null) {
-                return null;
-            }
-
-            return `${courseId}:${signId}`;
-        }
-
-        function scheduleAlertTone(audioCtx, destination, startTime, frequency, duration, gainValue = 0.05) {
-            const oscillator = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-
-            oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(frequency, startTime);
-
-            gainNode.gain.setValueAtTime(0.0001, startTime);
-            gainNode.gain.exponentialRampToValueAtTime(gainValue, startTime + 0.02);
-            gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
-
-            oscillator.connect(gainNode);
-            gainNode.connect(destination);
-            oscillator.start(startTime);
-            oscillator.stop(startTime + duration + 0.03);
-        }
-
-        async function playSignStartAlertTone() {
-            const audioCtx = getAudioContext();
-            if (!audioCtx) {
-                return false;
-            }
-
-            try {
-                if (audioCtx.state === 'suspended') {
-                    await audioCtx.resume();
-                }
-            } catch (error) {
-                console.debug('Audio resume blocked', error);
-            }
-
-            if (audioCtx.state !== 'running') {
-                return false;
-            }
-
-            const masterGain = audioCtx.createGain();
-            masterGain.gain.value = 0.8;
-            masterGain.connect(audioCtx.destination);
-
-            const startTime = audioCtx.currentTime + 0.03;
-            scheduleAlertTone(audioCtx, masterGain, startTime, 784, 0.14, 0.05);
-            scheduleAlertTone(audioCtx, masterGain, startTime + 0.18, 988, 0.16, 0.06);
-            scheduleAlertTone(audioCtx, masterGain, startTime + 0.38, 1175, 0.2, 0.065);
-
-            return true;
-        }
-
-        async function speakSignActivePrompt() {
-            if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
-                return false;
-            }
-
-            return await new Promise((resolve) => {
-                let settled = false;
-                const finish = (result) => {
-                    if (settled) {
-                        return;
-                    }
-                    settled = true;
-                    clearTimeout(timeoutId);
-                    resolve(result);
-                };
-
-                const utterance = new SpeechSynthesisUtterance('正在签到');
-                utterance.lang = 'zh-CN';
-                utterance.rate = 1;
-                utterance.pitch = 1;
-                utterance.volume = 1;
-                utterance.onend = () => finish(true);
-                utterance.onerror = () => finish(false);
-
-                const timeoutId = window.setTimeout(() => finish(false), 2500);
-
-                try {
-                    window.speechSynthesis.cancel();
-                    window.speechSynthesis.speak(utterance);
-                } catch (error) {
-                    console.debug('Speech synthesis blocked', error);
-                    finish(false);
-                }
-            });
-        }
-
-        function clearSignAlertLoopTimer() {
-            if (signAlertLoopTimer) {
-                window.clearTimeout(signAlertLoopTimer);
-                signAlertLoopTimer = null;
-            }
-        }
-
-        function scheduleNextSignAlert(signTaskKey, delayMs = signAlertIntervalMs) {
-            if (!signTaskKey || activeAlertSignKey !== signTaskKey) {
-                return;
-            }
-
-            clearSignAlertLoopTimer();
-            signAlertLoopTimer = window.setTimeout(() => {
-                void runContinuousSignAlert(signTaskKey);
-            }, delayMs);
-        }
-
-        function stopContinuousSignAlert() {
-            clearSignAlertLoopTimer();
-            signAlertLoopRunning = false;
-            activeAlertSignKey = null;
-            pendingAlertSignKey = null;
-
-            if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel();
-            }
-        }
-
-        async function playSignActiveAlertOnce() {
-            const spoke = await speakSignActivePrompt();
-            if (spoke) {
-                return true;
-            }
-
-            return await playSignStartAlertTone();
-        }
-
-        async function runContinuousSignAlert(signTaskKey) {
-            if (!signTaskKey || activeAlertSignKey !== signTaskKey || signAlertLoopRunning) {
-                return;
-            }
-
-            signAlertLoopRunning = true;
-            clearSignAlertLoopTimer();
-
-            try {
-                const played = await playSignActiveAlertOnce();
-                if (activeAlertSignKey !== signTaskKey) {
-                    return;
-                }
-
-                pendingAlertSignKey = played ? null : signTaskKey;
-                scheduleNextSignAlert(signTaskKey, signAlertIntervalMs);
-            } finally {
-                signAlertLoopRunning = false;
-            }
-        }
-
-        async function unlockAudioPlayback() {
-            const audioCtx = getAudioContext();
-            if (!audioCtx) {
-                return true;
-            }
-
-            try {
-                if (audioCtx.state === 'suspended') {
-                    await audioCtx.resume();
-                }
-            } catch (error) {
-                console.debug('Audio unlock blocked', error);
-            }
-
-            if (audioCtx.state !== 'running') {
-                return false;
-            }
-
-            if (pendingAlertSignKey && pendingAlertSignKey === activeAlertSignKey) {
-                const pendingKey = pendingAlertSignKey;
-                pendingAlertSignKey = null;
-                void runContinuousSignAlert(pendingKey);
-            }
-
-            return true;
-        }
-
-        function registerAudioUnlock() {
-            const unlock = () => {
-                void unlockAudioPlayback();
-            };
-
-            window.addEventListener('pointerdown', unlock, { passive: true });
-            window.addEventListener('keydown', unlock);
-        }
-
-        function syncContinuousSignAlert(data) {
-            const signTaskKey = getSignTaskKey(data);
-            if (!signTaskKey) {
-                stopContinuousSignAlert();
-                return;
-            }
-
-            if (activeAlertSignKey === signTaskKey) {
-                return;
-            }
-
-            stopContinuousSignAlert();
-            activeAlertSignKey = signTaskKey;
-            pendingAlertSignKey = signTaskKey;
-            void runContinuousSignAlert(signTaskKey);
-        }
-
-        function setFieldText(id, value, fallback = "-") {
-            const element = document.getElementById(id);
-            if (!element) return;
-            element.textContent = (value === undefined || value === null || value === "") ? fallback : value;
-        }
-
-        function setJsonText(id, value) {
-            const element = document.getElementById(id);
-            if (!element) return;
-            if (value === undefined || value === null || value === "") {
-                element.textContent = "-";
-                return;
-            }
-            element.textContent = typeof value === 'string'
-                ? value
-                : JSON.stringify(value, null, 2);
-        }
-
-        function formatSignRank(value) {
-            const rank = Number(value);
-            if (!Number.isFinite(rank) || rank <= 0) {
-                return "-";
-            }
-            return '第' + rank + '个';
-        }
-
-        function formatDistance(value) {
-            const distance = Number(value);
-            if (!Number.isFinite(distance) || distance <= 0) {
-                return null;
-            }
-            if (distance >= 1000) {
-                const km = distance / 1000;
-                return `${km >= 10 ? km.toFixed(0) : km.toFixed(1)} km`;
-            }
-            return `${Math.round(distance)} m`;
-        }
-
-        function createStudentTag(text, extraClass = "") {
-            const tag = document.createElement('span');
-            tag.className = extraClass ? `student-tag ${extraClass}` : 'student-tag';
-            tag.textContent = text;
-            return tag;
-        }
-
-        function resetDashboardData() {
-            stopContinuousSignAlert();
-            pendingAlertSignKey = null;
-            document.getElementById('profile-card').classList.add('hidden');
-            document.getElementById('sign-meta-card').classList.add('hidden');
-            document.getElementById('signed-students-card').classList.add('hidden');
-            document.getElementById('faye-debug-card').classList.add('hidden');
-            setFieldText('profile-name', '-');
-            setFieldText('profile-student-number', '-');
-            setFieldText('profile-class-name', '-');
-            setFieldText('profile-department-name', '-');
-            setFieldText('profile-college-name', '-');
-            setFieldText('sign-name', '暂无活跃签到', '暂无活跃签到');
-            setFieldText('sign-type', '-');
-            setFieldText('sign-course-id', '-');
-            setFieldText('sign-sign-id', '-');
-            setFieldText('sign-count', '0', '0');
-            setFieldText('sign-qr-status', '等待获取', '等待获取');
-            setFieldText('sign-status-message', '初始化中...', '初始化中...');
-            setFieldText('sign-result-text', '-');
-            setFieldText('sign-rank', '-');
-            setFieldText('faye-channel', '-');
-            setFieldText('faye-subscription', '-');
-            setFieldText('faye-event-kind', '-');
-            setFieldText('faye-data-type', '-');
-            setFieldText('faye-successful', '-');
-            setFieldText('faye-inner-token', '-');
-            setFieldText('faye-history-count', '0', '0');
-            setFieldText('faye-subscriptions', '-');
-            setFieldText('signed-students-count', '0 人', '0 人');
-            document.getElementById('signed-students-empty').classList.add('hidden');
-            document.getElementById('signed-students-list').replaceChildren();
-            setJsonText('faye-raw-json', '-');
-        }
-
-        function renderProfile(profile) {
-            const profileCard = document.getElementById('profile-card');
-            if (!profile) {
-                profileCard.classList.add('hidden');
-                return;
-            }
-
-            profileCard.classList.remove('hidden');
-            setFieldText('profile-name', profile.name);
-            setFieldText('profile-student-number', profile.student_number);
-            setFieldText('profile-class-name', profile.class_name);
-            setFieldText('profile-department-name', profile.department_name);
-            setFieldText('profile-college-name', profile.college_name);
-        }
-
-        function renderSignMeta(data) {
-            const signMetaCard = document.getElementById('sign-meta-card');
-            const currentSign = data.current_sign || null;
-            const resultMeta = data.result_meta || {};
-            const signName = currentSign ? currentSign.name : (resultMeta.task_name || '暂无活跃签到');
-            const signType = currentSign ? currentSign.signType : (resultMeta.sign_type || '-');
-            const courseId = currentSign ? currentSign.courseId : (resultMeta.course_id ?? '-');
-            const signId = currentSign ? currentSign.signId : (resultMeta.sign_id ?? '-');
-            const qrStatus = signType === '二维码签到'
-                ? (resultMeta.qr_ready ? '二维码已获取' : '等待获取')
-                : (signType === '-' ? '等待获取' : '无需二维码');
-
-            signMetaCard.classList.remove('hidden');
-            setFieldText('sign-name', signName, '暂无活跃签到');
-            setFieldText('sign-type', signType);
-            setFieldText('sign-course-id', courseId, '-');
-            setFieldText('sign-sign-id', signId, '-');
-            setFieldText('sign-count', data.active_sign_count ?? 0, '0');
-            setFieldText('sign-qr-status', qrStatus, '等待获取');
-            setFieldText('sign-status-message', resultMeta.status_message || data.message || '暂无状态');
-            setFieldText('sign-result-text', resultMeta.frontend_message || '-');
-            setFieldText('sign-rank', formatSignRank(resultMeta.sign_rank), '-');
-        }
-
-        function renderSignedStudents(data) {
-            const signedStudentsCard = document.getElementById('signed-students-card');
-            const signedStudentsEmpty = document.getElementById('signed-students-empty');
-            const signedStudentsList = document.getElementById('signed-students-list');
-            const resultMeta = data.result_meta || {};
-            const students = Array.isArray(resultMeta.signed_students) ? resultMeta.signed_students : [];
-            const shouldShow = Boolean(data.current_sign || students.length);
-
-            signedStudentsList.replaceChildren();
-            setFieldText('signed-students-count', `${students.length} 人`, '0 人');
-
-            if (!shouldShow) {
-                signedStudentsCard.classList.add('hidden');
-                signedStudentsEmpty.classList.add('hidden');
-                return;
-            }
-
-            signedStudentsCard.classList.remove('hidden');
-
-            if (!students.length) {
-                signedStudentsEmpty.classList.remove('hidden');
-                return;
-            }
-
-            signedStudentsEmpty.classList.add('hidden');
-
-            students.forEach((student, index) => {
-                const studentRow = document.createElement('article');
-                studentRow.className = 'student-row';
-
-                const studentAvatar = document.createElement('img');
-                studentAvatar.className = 'student-avatar';
-                studentAvatar.alt = `${student.name || '学生'}头像`;
-                studentAvatar.loading = 'lazy';
-                studentAvatar.referrerPolicy = 'no-referrer';
-                studentAvatar.src = student.avatar || 'https://app.teachermate.com.cn/images/student-default-avatar.png';
-                studentAvatar.onerror = () => {
-                    studentAvatar.onerror = null;
-                    studentAvatar.src = 'https://app.teachermate.com.cn/images/student-default-avatar.png';
-                };
-
-                const studentMain = document.createElement('div');
-                studentMain.className = 'student-main';
-
-                const studentTitle = document.createElement('div');
-                studentTitle.className = 'student-title';
-
-                const studentName = document.createElement('span');
-                studentName.className = 'student-name';
-                studentName.textContent = student.name || '未命名学生';
-
-                const studentRank = document.createElement('span');
-                studentRank.className = 'student-rank';
-                const rank = Number(student.rank);
-                studentRank.textContent = Number.isFinite(rank) && rank > 0
-                    ? `第 ${rank} 个`
-                    : `#${index + 1}`;
-
-                const studentNumber = document.createElement('div');
-                studentNumber.className = 'student-number';
-                studentNumber.textContent = student.student_number || '学号未提供';
-
-                const studentMeta = document.createElement('div');
-                studentMeta.className = 'student-meta';
-
-                if (student.is_new === true) {
-                    studentMeta.appendChild(createStudentTag('新加入'));
-                }
-
-                const outOfBound = Number(student.is_out_of_bound);
-                if (Number.isFinite(outOfBound) && outOfBound > 0) {
-                    studentMeta.appendChild(createStudentTag('超出范围', 'warning'));
-                }
-
-                const distanceText = formatDistance(student.distance);
-                if (distanceText) {
-                    studentMeta.appendChild(createStudentTag(`距离 ${distanceText}`));
-                }
-
-                const teamId = Number(student.team_id);
-                if (Number.isFinite(teamId) && teamId > 0) {
-                    studentMeta.appendChild(createStudentTag(`队伍 ${teamId}`));
-                }
-
-                if (!studentMeta.childNodes.length) {
-                    studentMeta.appendChild(createStudentTag('已签到', 'success'));
-                }
-
-                studentTitle.appendChild(studentName);
-                studentTitle.appendChild(studentRank);
-                studentMain.appendChild(studentTitle);
-                studentMain.appendChild(studentNumber);
-                studentMain.appendChild(studentMeta);
-
-                studentRow.appendChild(studentAvatar);
-                studentRow.appendChild(studentMain);
-                signedStudentsList.appendChild(studentRow);
-            });
-        }
-
-        function renderFayeDebug(data) {
-            const debugCard = document.getElementById('faye-debug-card');
-            const resultMeta = data.result_meta || {};
-            const faye = resultMeta.faye || null;
-            const fayeHistory = Array.isArray(resultMeta.faye_history) ? resultMeta.faye_history : [];
-
-            if (!faye) {
-                debugCard.classList.add('hidden');
-                return;
-            }
-
-            debugCard.classList.remove('hidden');
-            setFieldText('faye-channel', faye.channel);
-            setFieldText('faye-subscription', faye.subscription);
-            setFieldText('faye-event-kind', faye.event_kind);
-            setFieldText('faye-data-type', faye.data_type, '-');
-            setFieldText('faye-successful', faye.successful, '-');
-            setFieldText('faye-inner-token', faye.inner_faye_token, '-');
-            setFieldText('faye-history-count', fayeHistory.length ?? 0, '0');
-            setFieldText(
-                'faye-subscriptions',
-                Array.isArray(resultMeta.faye_subscriptions) && resultMeta.faye_subscriptions.length
-                    ? resultMeta.faye_subscriptions.join(' | ')
-                    : '-',
-                '-'
-            );
-            setJsonText('faye-raw-json', faye.raw || faye);
-        }
-
-        function renderDashboardData(data) {
-            if (!data || typeof data !== 'object') return;
-            renderProfile(data.profile);
-            renderSignMeta(data);
-            renderSignedStudents(data);
-            renderFayeDebug(data);
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            initTheme();
-            registerAudioUnlock();
-            resetDashboardData();
-            initApp();
-        });
-
-        async function initApp() {
-            const autoRedirect = getCookie('auto_redirect');
-            document.getElementById('auto-redirect-check').checked =
-                autoRedirect === null ? isWeChatEnvironment() : (autoRedirect !== 'false');
-
-            try {
-                // 每次进入主页都会调用此接口，后端会强制验证 OpenID
-                const res = await fetch('/api/check_session');
-                const data = await res.json();
-
-                if (data.valid) {
-                    showDashboard(data.openid, data);
-                } else {
-                    if (data.message && data.message !== "未登录") {
-                        alert("身份验证已过期: " + data.message);
-                    }
-                    showLogin();
-                }
-            } catch (e) {
-                console.error(e);
-                showLogin();
-            }
-        }
-
-        function showLogin() {
-            document.getElementById('login-view').classList.remove('hidden');
-            document.getElementById('dashboard-view').classList.add('hidden');
-            resetDashboardData();
-            stopPolling();
-        }
-
-        function showDashboard(openid, dashboardData = null) {
-            document.getElementById('login-view').classList.add('hidden');
-            document.getElementById('dashboard-view').classList.remove('hidden');
-            document.getElementById('current-user').textContent = openid.substring(0, 6) + '***' + openid.substring(openid.length-4);
-            renderDashboardData(dashboardData || {});
-            isFirstPoll = true;
-            startPolling();
-        }
-
-        async function performLogin() {
-            const btn = document.getElementById('login-btn');
-            const msg = document.getElementById('login-msg');
-            const input = document.getElementById('openid-input');
-            const rawInput = input.value.trim();
-
-            if (!rawInput) {
-                msg.textContent = "请输入OpenID或包含OpenID的URL";
-                return;
-            }
-
-            btn.disabled = true;
-            btn.textContent = "验证中...";
-            msg.textContent = "";
-
-            try {
-                void unlockAudioPlayback();
-                // 提取openid（支持URL或纯openid）
-                const extractedOpenId = extractOpenIdFromUrl(rawInput);
-                
-                // 验证提取的openid格式（假设是32位十六进制字符串）
-                const openidRegex = /^[a-fA-F0-9]{32}$/;
-                if (!openidRegex.test(extractedOpenId)) {
-                    msg.textContent = "OpenID格式不正确（应为32位十六进制字符串）";
-                    return;
-                }
-
-                const res = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ openid: extractedOpenId })
-                });
-                const data = await res.json();
-
-                if (data.success) {
-                    showDashboard(extractedOpenId, data);
-                } else {
-                    msg.textContent = data.message;
-                    setCookie("user_openid", "", -1);
-                }
-            } catch (e) {
-                msg.textContent = "请求失败，请检查网络";
-                console.error(e);
-            } finally {
-                btn.disabled = false;
-                btn.textContent = "开始监听";
-            }
-        }
-
-        async function performLogout() {
-            if(!confirm("确定要停止监听并退出吗？")) return;
-            try { await fetch('/api/logout', { method: 'POST' }); } catch(e) {}
-            setCookie("user_openid", "", -1);
-            location.reload();
-        }
-
-        function saveSettings() {
-            const isChecked = document.getElementById('auto-redirect-check').checked;
-            setCookie('auto_redirect', isChecked, 30);
-
-            const qrArea = document.getElementById('qr-display-area');
-            if (isChecked && isWeChatEnvironment() && !qrArea.classList.contains('hidden') && currentQrUrl) {
-                window.location.href = currentQrUrl;
-            }
-        }
-
-        function startPolling() {
-            if (pollingInterval) clearInterval(pollingInterval);
-            pollStatus();
-            pollingInterval = setInterval(pollStatus, 2000);
-        }
-
-        function stopPolling() {
-            if (pollingInterval) clearInterval(pollingInterval);
-        }
-
-        function renderQrCode(url) {
-            if (url === currentQrUrl) return;
-            currentQrUrl = url;
-            const container = document.getElementById('qrcode');
-            container.innerHTML = "";
-
-            new QRCode(container, {
-                text: url,
-                width: 300,
-                height: 300,
-                colorDark : "#000000",
-                colorLight : "#ffffff",
-                correctLevel : QRCode.CorrectLevel.M
-            });
-
-            const linkEl = document.getElementById('qr-link-text');
-            linkEl.href = url;
-            linkEl.title = url;
-            linkEl.textContent = "打开签到链接";
-        }
-
-        async function pollStatus() {
-            const statusBox = document.getElementById('status-box');
-            const statusText = document.getElementById('status-text');
-            const qrArea = document.getElementById('qr-display-area');
-            const autoRedirect = document.getElementById('auto-redirect-check').checked;
-            const canAutoRedirect = autoRedirect && isWeChatEnvironment();
-
-            try {
-                const res = await fetch('/qr_code');
-                const data = await res.json();
-                syncContinuousSignAlert(data);
-                renderDashboardData(data);
-                const resultMeta = data.result_meta || {};
-
-                if (data.success === 0) {
-                    statusBox.className = "status-box waiting";
-                    statusText.textContent = data.message || "正在等待签到任务...";
-                    qrArea.classList.add('hidden');
-                    currentQrUrl = null;
-                } else if (resultMeta.qr_ready && data.qr_url) {
-                    statusBox.className = "status-box success";
-
-                    if (data.qr_url) renderQrCode(data.qr_url);
-
-                    if (canAutoRedirect) {
-                        qrArea.classList.add('hidden');
-
-                        if (isFirstPoll) {
-                            // 首次加载发现签到：延时2秒
-                            statusText.textContent = "检测到签到，2秒后自动跳转...";
-                            stopPolling();
-                            setTimeout(() => {
-                                if (document.getElementById('auto-redirect-check').checked) {
-                                    window.location.href = data.qr_url;
-                                } else {
-                                    statusText.textContent = "自动跳转已取消";
-                                    qrArea.classList.remove('hidden');
-                                    startPolling();
-                                }
-                            }, 2000);
-                        } else {
-                            // 监听中发现新签到：立即跳转
-                            statusText.textContent = "验证成功，正在跳转...";
-                            stopPolling();
-                            window.location.href = data.qr_url;
-                        }
-                    } else {
-                        // 非微信环境或未开启自动跳转时，直接展示二维码
-                        statusText.textContent = autoRedirect && !isWeChatEnvironment()
-                            ? "检测到签到，请扫描下方二维码；自动跳转仅支持微信内置浏览器"
-                            : "签到已就绪，请扫描下方二维码";
-                        qrArea.classList.remove('hidden');
-                    }
-                } else {
-                    statusBox.className = resultMeta.is_error ? "status-box error" : "status-box success";
-                    statusText.textContent = resultMeta.frontend_message || resultMeta.status_message || data.message || "签到结果已更新";
-                    qrArea.classList.add('hidden');
-                    currentQrUrl = null;
-                }
-            } catch (e) {
-                console.log("Polling error", e);
-            }
-            isFirstPoll = false;
-        }
-    </script>
 </body>
 </html>
