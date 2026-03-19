@@ -1226,6 +1226,7 @@ openid_refresh_manager = None
 app = Flask(__name__)
 runtime_init_lock = threading.Lock()
 runtime_initialized = False
+RUNTIME_STATE_SCHEMA_VERSION = 1
 
 
 def configure_runtime(openid_method: Optional[str] = None) -> None:
@@ -1259,21 +1260,142 @@ def ensure_runtime_initialized() -> None:
         runtime_initialized = True
 
 
-def build_empty_status(message: Optional[str] = None) -> Dict[str, Any]:
-    status_message = message or openid_refresh_manager.build_waiting_message()
-    result_meta = build_result_meta(None, status_message)
+def build_pipeline_runtime_state(
+    pipeline: Optional[Pipeline],
+    *,
+    fallback_message: str,
+    fallback_profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if pipeline:
+        pipeline_state = dict(pipeline.get_status())
+        pipeline_state["has_pipeline"] = True
+        return pipeline_state
+
+    result_meta = build_result_meta(None, fallback_message)
     return {
+        "has_pipeline": False,
         "success": 0,
-        "message": status_message,
+        "message": fallback_message,
         "qr_url": None,
         "is_running": False,
-        "profile": openid_refresh_manager.get_public_state().get("profile"),
+        "profile": fallback_profile,
         "active_sign_count": 0,
         "active_signs": [],
         "current_sign": None,
         "result_meta": result_meta,
-        "openid_status": openid_refresh_manager.get_public_state(),
     }
+
+
+def build_runtime_summary(
+    openid_state: Dict[str, Any],
+    pipeline_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    result_meta = pipeline_state.get("result_meta") or {}
+    active_sign_count = safe_int(pipeline_state.get("active_sign_count")) or 0
+    status_message = str(
+        pipeline_state.get("message")
+        or openid_state.get("last_error")
+        or openid_refresh_manager.build_waiting_message()
+    )
+
+    return {
+        "session_valid": bool(openid_state.get("openid") and pipeline_state.get("has_pipeline")),
+        "has_openid": bool(openid_state.get("openid")),
+        "has_pipeline": bool(pipeline_state.get("has_pipeline")),
+        "collector_method": openid_state.get("collector_method"),
+        "current_source": openid_state.get("current_source"),
+        "is_refreshing": bool(openid_state.get("is_refreshing")),
+        "used_file_fallback": bool(openid_state.get("used_file_fallback")),
+        "active_sign_count": active_sign_count,
+        "has_active_signs": active_sign_count > 0,
+        "qr_ready": bool(result_meta.get("qr_ready")),
+        "sign_completed": bool(result_meta.get("sign_completed")),
+        "result_ready": bool(result_meta.get("result_ready")),
+        "has_error": bool(result_meta.get("is_error") or openid_state.get("last_error")),
+        "status_message": status_message,
+    }
+
+
+def build_runtime_state(message: Optional[str] = None) -> Dict[str, Any]:
+    openid_state = openid_refresh_manager.get_public_state()
+    pipeline = get_pipeline(openid_state.get("openid"))
+    fallback_message = message or openid_refresh_manager.build_waiting_message()
+    pipeline_state = build_pipeline_runtime_state(
+        pipeline,
+        fallback_message=fallback_message,
+        fallback_profile=openid_state.get("profile"),
+    )
+    return {
+        "schema_version": RUNTIME_STATE_SCHEMA_VERSION,
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "openid_status": openid_state,
+        "pipeline_status": pipeline_state,
+        "summary": build_runtime_summary(openid_state, pipeline_state),
+    }
+
+
+def get_runtime_current_sign(pipeline_state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    active_signs = pipeline_state.get("active_signs") or []
+    if active_signs:
+        return active_signs[0]
+    return pipeline_state.get("current_sign")
+
+
+def build_frontend_status_payload(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    pipeline_state = dict(runtime_state["pipeline_status"])
+    pipeline_state["openid_status"] = runtime_state["openid_status"]
+    pipeline_state["runtime_summary"] = runtime_state["summary"]
+    pipeline_state["generated_at"] = runtime_state["generated_at"]
+    return pipeline_state
+
+
+def build_openid_status_payload(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(runtime_state["openid_status"])
+    payload["runtime_summary"] = runtime_state["summary"]
+    payload["generated_at"] = runtime_state["generated_at"]
+    return payload
+
+
+def build_session_payload(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    openid_state = runtime_state["openid_status"]
+    pipeline_state = runtime_state["pipeline_status"]
+    summary = runtime_state["summary"]
+    payload = {
+        "valid": summary["session_valid"],
+        "openid_status": openid_state,
+        "runtime_summary": summary,
+        "generated_at": runtime_state["generated_at"],
+        "auto_mode": True,
+    }
+    if summary["session_valid"]:
+        payload.update(
+            {
+                "openid": openid_state.get("openid"),
+                "profile": pipeline_state.get("profile") or openid_state.get("profile"),
+                "current_sign": get_runtime_current_sign(pipeline_state),
+            }
+        )
+    else:
+        payload["message"] = summary["status_message"]
+    return payload
+
+
+def build_empty_status(message: Optional[str] = None) -> Dict[str, Any]:
+    openid_state = openid_refresh_manager.get_public_state()
+    fallback_message = message or openid_refresh_manager.build_waiting_message()
+    pipeline_state = build_pipeline_runtime_state(
+        None,
+        fallback_message=fallback_message,
+        fallback_profile=openid_state.get("profile"),
+    )
+    runtime_state = {
+        "schema_version": RUNTIME_STATE_SCHEMA_VERSION,
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "openid_status": openid_state,
+        "pipeline_status": pipeline_state,
+        "summary": build_runtime_summary(openid_state, pipeline_state),
+    }
+    return build_frontend_status_payload(runtime_state)
 
 
 @app.route("/")
@@ -1292,14 +1414,17 @@ def login():
 
     try:
         pipeline = openid_refresh_manager.use_manual_openid(openid)
+        runtime_state = build_runtime_state()
         resp = make_response(
             jsonify(
                 {
                     "success": True,
                     "message": "登录成功",
                     "profile": pipeline.profile,
-                    "current_sign": pipeline.active_signs[0] if pipeline.active_signs else None,
-                    "openid_status": openid_refresh_manager.get_public_state(),
+                    "current_sign": get_runtime_current_sign(runtime_state["pipeline_status"]),
+                    "openid_status": runtime_state["openid_status"],
+                    "runtime_summary": runtime_state["summary"],
+                    "generated_at": runtime_state["generated_at"],
                 }
             )
         )
@@ -1313,30 +1438,7 @@ def login():
 @app.route("/api/check_session")
 def check_session():
     ensure_runtime_initialized()
-    state = openid_refresh_manager.get_public_state()
-    pipeline = openid_refresh_manager.get_current_pipeline()
-
-    if state.get("openid") and pipeline:
-        return jsonify(
-            {
-                "valid": True,
-                "openid": state["openid"],
-                "profile": pipeline.profile,
-                "current_sign": pipeline.active_signs[0] if pipeline.active_signs else None,
-                "openid_status": state,
-                "auto_mode": True,
-            }
-        )
-
-    message = openid_refresh_manager.build_waiting_message()
-    return jsonify(
-        {
-            "valid": False,
-            "message": message,
-            "openid_status": state,
-            "auto_mode": True,
-        }
-    )
+    return jsonify(build_session_payload(build_runtime_state()))
 
 
 @app.route("/api/logout", methods=["POST"])
@@ -1351,19 +1453,19 @@ def logout():
 @app.route("/api/openid_status")
 def openid_status():
     ensure_runtime_initialized()
-    return jsonify(openid_refresh_manager.get_public_state())
+    return jsonify(build_openid_status_payload(build_runtime_state()))
+
+
+@app.route("/api/runtime_state")
+def runtime_state():
+    ensure_runtime_initialized()
+    return jsonify(build_runtime_state())
 
 
 @app.route("/qr_code")
 def qr_code_status():
     ensure_runtime_initialized()
-    pipeline = openid_refresh_manager.get_current_pipeline()
-    if not pipeline:
-        return jsonify(build_empty_status())
-
-    status = pipeline.get_status()
-    status["openid_status"] = openid_refresh_manager.get_public_state()
-    return jsonify(status)
+    return jsonify(build_frontend_status_payload(build_runtime_state()))
 
 
 @app.after_request
