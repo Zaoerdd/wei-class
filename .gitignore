@@ -41,10 +41,16 @@ instance/
 # Logs
 *.log
 logs/web.pid
+logs/mitmproxy.pid
 logs/requirements.sha256
 logs/latest_openid.json
 logs/mitm_openid_result.txt
+logs/*.png
+logs/cv_template_cache/
 @AutomationLog.txt
+
+# Local CV template overrides
+cv_templates_local/
 
 # Editor and OS files
 .vscode/
