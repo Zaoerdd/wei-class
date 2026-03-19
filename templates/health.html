@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>微助教签到助手环境体检</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+    <script defer src="{{ url_for('static', filename='health.js') }}"></script>
+</head>
+<body data-page="health">
+    <div class="page-shell">
+        <header class="hero-card reveal">
+            <div class="hero-copy">
+                <p class="eyebrow">DEPLOYMENT CHECK</p>
+                <h1>环境体检页</h1>
+                <p class="hero-description">
+                    这里会把本机部署所需的关键条件一次性列出来。就算你不看终端，也能知道现在卡在哪一步、下一步该做什么。
+                </p>
+                <div class="hero-actions">
+                    <button class="btn btn-primary" id="health-refresh-btn" type="button">重新体检</button>
+                    <a class="btn btn-secondary" href="/">返回主页</a>
+                    <a class="btn btn-secondary" href="/usage">查看使用说明</a>
+                </div>
+            </div>
+            <aside class="hero-panel">
+                <span class="state-pill state-pill--idle" id="health-overall-pill">检测中</span>
+                <h2 id="health-overall-title">正在收集环境信息</h2>
+                <p id="health-overall-description">首次打开时会检查运行状态、微信窗口、代理、证书、模板和缓存。</p>
+                <div class="hero-metrics">
+                    <div>
+                        <span>当前采集方式</span>
+                        <strong id="health-collector-method">检测中</strong>
+                    </div>
+                    <div>
+                        <span>体检时间</span>
+                        <strong id="health-generated-at">-</strong>
+                    </div>
+                    <div>
+                        <span>下一步建议</span>
+                        <strong id="health-next-action">等待体检结果</strong>
+                    </div>
+                </div>
+            </aside>
+        </header>
+
+        <section class="notice-banner hidden reveal" id="health-banner" aria-live="polite"></section>
+
+        <section class="overview-grid reveal" aria-label="体检总览">
+            <article class="overview-card">
+                <span class="overview-label">通过</span>
+                <strong class="overview-value" id="health-pass-count">0</strong>
+                <p class="overview-note">关键依赖和当前运行状态都正常。</p>
+            </article>
+            <article class="overview-card">
+                <span class="overview-label">注意项</span>
+                <strong class="overview-value" id="health-warn-count">0</strong>
+                <p class="overview-note">不是硬阻塞，但最好尽快处理。</p>
+            </article>
+            <article class="overview-card">
+                <span class="overview-label">阻塞项</span>
+                <strong class="overview-value" id="health-fail-count">0</strong>
+                <p class="overview-note">这些问题会直接影响自动采集或恢复。</p>
+            </article>
+            <article class="overview-card">
+                <span class="overview-label">当前 OpenID</span>
+                <strong class="overview-value" id="health-openid">等待体检</strong>
+                <p class="overview-note" id="health-openid-note">这里会显示当前运行时的 OpenID 状态。</p>
+            </article>
+        </section>
+
+        <section class="panel reveal" aria-labelledby="health-checks-title">
+            <div class="panel-heading">
+                <div>
+                    <p class="panel-eyebrow">检查列表</p>
+                    <h2 id="health-checks-title">关键部署检查</h2>
+                </div>
+                <span class="panel-badge" id="health-check-count">0 项</span>
+            </div>
+            <div class="health-check-grid" id="health-check-grid">
+                <div class="empty-state">
+                    <strong>正在加载体检结果</strong>
+                    <p>如果本机服务可用，这里会很快出现完整的检查列表。</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel reveal" aria-labelledby="health-runtime-title">
+            <div class="panel-heading">
+                <div>
+                    <p class="panel-eyebrow">运行快照</p>
+                    <h2 id="health-runtime-title">当前运行状态摘要</h2>
+                </div>
+            </div>
+            <dl class="detail-list" id="health-runtime-details"></dl>
+        </section>
+    </div>
+</body>
+</html>

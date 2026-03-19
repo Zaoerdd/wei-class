@@ -8,8 +8,12 @@ import logging
 import os
 import queue
 import re
+import socket
+import subprocess
 import threading
 import time
+import sys
+import winreg
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -1227,6 +1231,7 @@ app = Flask(__name__)
 runtime_init_lock = threading.Lock()
 runtime_initialized = False
 RUNTIME_STATE_SCHEMA_VERSION = 1
+HEALTH_STATUS_ORDER = {"fail": 0, "warn": 1, "pass": 2, "skip": 3}
 
 
 def configure_runtime(openid_method: Optional[str] = None) -> None:
@@ -1398,9 +1403,758 @@ def build_empty_status(message: Optional[str] = None) -> Dict[str, Any]:
     return build_frontend_status_payload(runtime_state)
 
 
+def build_health_check(
+    check_id: str,
+    title: str,
+    status: str,
+    summary: str,
+    *,
+    category: str = "environment",
+    detail: Optional[str] = None,
+    action: Optional[str] = None,
+    facts: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return {
+        "id": check_id,
+        "title": title,
+        "category": category,
+        "status": status,
+        "summary": summary,
+        "detail": detail,
+        "action": action,
+        "facts": list(facts or []),
+    }
+
+
+def is_path_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(root.resolve(strict=False))
+        return True
+    except Exception:
+        return False
+
+
+def get_capture_proxy_endpoint() -> Tuple[str, int]:
+    host = str(getattr(collector, "capture_proxy_host", None) or os.getenv("WECHAT_CV_PROXY_HOST", "127.0.0.1")).strip()
+    port = safe_int(getattr(collector, "capture_proxy_port", None) or os.getenv("WECHAT_CV_PROXY_PORT", "8080")) or 8080
+    return host or "127.0.0.1", port
+
+
+def normalize_proxy_server(proxy_server: Optional[str]) -> Optional[str]:
+    raw = str(proxy_server or "").strip()
+    if not raw:
+        return None
+    if "=" not in raw:
+        return raw
+
+    entries: Dict[str, str] = {}
+    first_value = None
+    for item in raw.split(";"):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        scheme, value = item.split("=", 1)
+        scheme = scheme.strip().lower()
+        value = value.strip()
+        if not value:
+            continue
+        entries[scheme] = value
+        if first_value is None:
+            first_value = value
+
+    for preferred in ("http", "https"):
+        if entries.get(preferred):
+            return entries[preferred]
+    return first_value
+
+
+def read_system_proxy_settings() -> Dict[str, Any]:
+    values = {
+        "proxy_enable": 0,
+        "proxy_server": None,
+        "effective_proxy_server": None,
+        "auto_config_url": None,
+        "auto_detect": 0,
+        "proxy_override": None,
+    }
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ) as key:
+            for name in ("ProxyEnable", "ProxyServer", "AutoConfigURL", "AutoDetect", "ProxyOverride"):
+                try:
+                    value, _ = winreg.QueryValueEx(key, name)
+                except OSError:
+                    continue
+                if name == "ProxyEnable":
+                    values["proxy_enable"] = safe_int(value) or 0
+                elif name == "ProxyServer":
+                    values["proxy_server"] = str(value).strip() or None
+                elif name == "AutoConfigURL":
+                    values["auto_config_url"] = str(value).strip() or None
+                elif name == "AutoDetect":
+                    values["auto_detect"] = safe_int(value) or 0
+                elif name == "ProxyOverride":
+                    values["proxy_override"] = str(value).strip() or None
+    except OSError as exc:
+        values["read_error"] = str(exc)
+
+    values["effective_proxy_server"] = normalize_proxy_server(values.get("proxy_server"))
+    return values
+
+
+def is_tcp_endpoint_reachable(host: str, port: int, timeout_seconds: float = 1.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout_seconds):
+            return True
+    except OSError:
+        return False
+
+
+def run_powershell_json(script: str, args: List[str], timeout_seconds: float = 8.0) -> Dict[str, Any]:
+    completed = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script, *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_seconds,
+        check=False,
+    )
+    stdout_lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if completed.returncode != 0:
+        error_text = completed.stderr.strip() or (stdout_lines[-1] if stdout_lines else "") or f"powershell exited {completed.returncode}"
+        raise RuntimeError(error_text)
+    if not stdout_lines:
+        raise RuntimeError("powershell returned no json output")
+    return json.loads(stdout_lines[-1])
+
+
+def inspect_mitm_certificate_state() -> Dict[str, Any]:
+    cert_path = Path(os.getenv("WECHAT_MITM_CERT_PATH") or (Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.cer"))
+    result = {
+        "cert_path": str(cert_path),
+        "exists": cert_path.exists(),
+        "trusted": False,
+        "subject": None,
+        "thumbprint": None,
+        "not_after": None,
+        "error": None,
+    }
+    if not cert_path.exists():
+        return result
+
+    script = (
+        "$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($args[0]); "
+        "$existing = Get-ChildItem Cert:\\CurrentUser\\Root | Where-Object { $_.Thumbprint -eq $cert.Thumbprint }; "
+        "[pscustomobject]@{"
+        "trusted = [bool]$existing; "
+        "subject = $cert.Subject; "
+        "thumbprint = $cert.Thumbprint; "
+        "not_after = $cert.NotAfter.ToString('o')"
+        "} | ConvertTo-Json -Compress"
+    )
+    try:
+        payload = run_powershell_json(script, [str(cert_path)])
+        result.update(
+            {
+                "trusted": bool(payload.get("trusted")),
+                "subject": payload.get("subject"),
+                "thumbprint": payload.get("thumbprint"),
+                "not_after": payload.get("not_after"),
+            }
+        )
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
+
+
+def inspect_capture_proxy_listener_state() -> Dict[str, Any]:
+    host, port = get_capture_proxy_endpoint()
+    mitmdump_path = Path(os.getenv("WECHAT_MITM_DUMP_PATH") or (BASE_DIR / ".venv-mitm" / "Scripts" / "mitmdump.exe"))
+    result_path = Path(
+        getattr(collector, "mitm_result_path", None)
+        or os.getenv("WECHAT_CV_MITM_RESULT_PATH")
+        or (BASE_DIR / "logs" / "mitm_openid_result.txt")
+    )
+    return {
+        "host": host,
+        "port": port,
+        "reachable": is_tcp_endpoint_reachable(host, port, timeout_seconds=1.0),
+        "mitmdump_path": str(mitmdump_path),
+        "mitmdump_exists": mitmdump_path.exists(),
+        "result_path": str(result_path),
+        "result_file_exists": result_path.exists(),
+    }
+
+
+def build_runtime_health_check(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    summary = runtime_state["summary"]
+    openid_state = runtime_state["openid_status"]
+    collector_method_name = openid_state.get("collector_method") or "unknown"
+    facts = [
+        {"label": "运行方式", "value": collector_method_name},
+        {"label": "当前来源", "value": openid_state.get("current_source") or "-"},
+        {"label": "上次刷新", "value": openid_state.get("last_refresh_at") or "-"},
+        {"label": "状态消息", "value": summary.get("status_message") or "-"},
+    ]
+    last_error = openid_state.get("last_error")
+    if last_error:
+        facts.append({"label": "最近错误", "value": last_error})
+
+    if summary["session_valid"] and not last_error and not openid_state.get("used_file_fallback"):
+        status = "pass"
+        health_summary = "当前已拿到有效 OpenID，服务正在自动监听。"
+        action = "可以直接回首页继续使用。"
+    elif summary["session_valid"] and openid_state.get("used_file_fallback"):
+        status = "warn"
+        health_summary = "服务已运行，但当前依赖缓存 OpenID 回退。"
+        action = "如果想恢复自动采集，先把微信手动退回到微助教聊天页，再刷新首页。"
+    elif summary["is_refreshing"]:
+        status = "warn"
+        health_summary = "服务正在自动获取 OpenID。"
+        action = "保持微信窗口可见，等待本轮采集完成。"
+    elif last_error:
+        status = "fail"
+        health_summary = "自动获取 OpenID 失败。"
+        action = "优先查看下面的微信窗口、代理和模式相关检查项。"
+    else:
+        status = "warn"
+        health_summary = "服务已启动，但还没有可用 OpenID。"
+        action = "打开微信并进入微助教服务号聊天页，然后再刷新体检页。"
+
+    return build_health_check(
+        "runtime",
+        "自动化运行状态",
+        status,
+        health_summary,
+        category="runtime",
+        detail=summary.get("status_message"),
+        action=action,
+        facts=facts,
+    )
+
+
+def build_python_environment_health_check() -> Dict[str, Any]:
+    executable = Path(sys.executable)
+    version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    in_virtualenv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    project_venv_root = BASE_DIR / ".venv"
+    using_project_venv = is_path_within(executable, project_venv_root)
+
+    facts = [
+        {"label": "Python", "value": version},
+        {"label": "解释器", "value": str(executable)},
+        {"label": "虚拟环境", "value": "项目 .venv" if using_project_venv else ("其他虚拟环境" if in_virtualenv else "未使用")},
+    ]
+
+    if sys.version_info < (3, 9):
+        status = "fail"
+        summary = "当前 Python 版本过低。"
+        action = "请使用 Python 3.9+ 重新创建 .venv 后再启动服务。"
+    elif using_project_venv:
+        status = "pass"
+        summary = "当前服务运行在项目自己的虚拟环境中。"
+        action = None
+    elif in_virtualenv:
+        status = "warn"
+        summary = "服务运行在虚拟环境中，但不是项目的 .venv。"
+        action = "建议统一使用 start_web_app.ps1，让项目自己维护依赖环境。"
+    else:
+        status = "warn"
+        summary = "当前解释器不是虚拟环境。"
+        action = "建议使用 start_web_app.ps1 或一键启动脚本，避免依赖污染。"
+
+    return build_health_check(
+        "python",
+        "Python 环境",
+        status,
+        summary,
+        action=action,
+        facts=facts,
+    )
+
+
+def build_wechat_health_check(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    method = runtime_state["summary"].get("collector_method") or getattr(collector, "method_name", "unknown")
+    facts: List[Dict[str, Any]] = [
+        {"label": "运行方式", "value": method},
+        {"label": "会话名", "value": collector_config.session_name},
+    ]
+
+    try:
+        if method == "cv" and hasattr(collector, "_list_wechat_windows"):
+            windows = collector._list_wechat_windows()
+            if not windows:
+                return build_health_check(
+                    "wechat",
+                    "微信窗口",
+                    "fail",
+                    "未检测到可见的微信主窗口。",
+                    detail="新版微信的 cv 模式需要桌面微信窗口处于可见状态，不能最小化。",
+                    action="先打开桌面微信，并把主窗口保持在前台或至少保持可见。",
+                    facts=facts,
+                )
+
+            primary = windows[0]
+            facts.extend(
+                [
+                    {"label": "窗口数量", "value": str(len(windows))},
+                    {"label": "窗口标题", "value": primary.title or "-"},
+                    {"label": "窗口类名", "value": primary.class_name or "-"},
+                ]
+            )
+            return build_health_check(
+                "wechat",
+                "微信窗口",
+                "pass",
+                "已检测到可见的微信窗口。",
+                detail="如果首页仍然拿不到 OpenID，通常是当前不在微助教聊天页，或模板/代理相关步骤还没完成。",
+                action="确认微信当前停留在微助教服务号聊天页。",
+                facts=facts,
+            )
+
+        if hasattr(collector, "find_wechat_window"):
+            window = collector.find_wechat_window()
+            if not window:
+                return build_health_check(
+                    "wechat",
+                    "微信窗口",
+                    "fail",
+                    "未检测到微信主窗口。",
+                    detail="旧版微信的 uiautomation 模式需要能直接找到桌面微信窗口。",
+                    action="先打开桌面微信，并保持窗口可见。",
+                    facts=facts,
+                )
+
+            title = getattr(window, "Name", "") if hasattr(window, "Name") else ""
+            class_name = getattr(window, "ClassName", "") if hasattr(window, "ClassName") else ""
+            if hasattr(collector, "safe_get"):
+                title = collector.safe_get(lambda: window.Name, title)
+                class_name = collector.safe_get(lambda: window.ClassName, class_name)
+
+            facts.extend(
+                [
+                    {"label": "窗口标题", "value": title or "-"},
+                    {"label": "窗口类名", "value": class_name or "-"},
+                ]
+            )
+
+            if method == "uiautomation" and hasattr(collector, "find_session_control"):
+                session_control = collector.find_session_control(window, collector_config.session_name)
+                if session_control is None:
+                    return build_health_check(
+                        "wechat",
+                        "微信窗口",
+                        "warn",
+                        "已检测到微信窗口，但还没在左侧列表中找到微助教服务号。",
+                        detail="uiautomation 模式依赖左侧聊天列表里能直接看到目标会话。",
+                        action="把微助教服务号固定到微信左侧列表，并保持在可见区域。",
+                        facts=facts,
+                    )
+
+            return build_health_check(
+                "wechat",
+                "微信窗口",
+                "pass",
+                "已检测到微信窗口。",
+                action="保持窗口可见即可。",
+                facts=facts,
+            )
+    except Exception as exc:
+        return build_health_check(
+            "wechat",
+            "微信窗口",
+            "warn",
+            "检测微信窗口时遇到异常。",
+            detail=str(exc),
+            action="先手动确认微信窗口已打开，再根据运行方式检查后续项。",
+            facts=facts,
+        )
+
+    return build_health_check(
+        "wechat",
+        "微信窗口",
+        "warn",
+        "当前运行方式没有提供可复用的微信窗口检测器。",
+        action="请手动确认桌面微信窗口已打开并保持可见。",
+        facts=facts,
+    )
+
+
+def build_system_proxy_health_check(runtime_state: Dict[str, Any], listener_state: Dict[str, Any]) -> Dict[str, Any]:
+    proxy_state = read_system_proxy_settings()
+    capture_target = f"{listener_state['host']}:{listener_state['port']}".lower()
+    effective_target = str(proxy_state.get("effective_proxy_server") or "").strip().lower()
+
+    facts = [
+        {"label": "代理启用", "value": "是" if proxy_state.get("proxy_enable") else "否"},
+        {"label": "代理地址", "value": proxy_state.get("proxy_server") or "-"},
+        {"label": "PAC", "value": proxy_state.get("auto_config_url") or "-"},
+        {"label": "自动检测", "value": "是" if proxy_state.get("auto_detect") else "否"},
+    ]
+    if proxy_state.get("proxy_override"):
+        facts.append({"label": "代理例外", "value": proxy_state["proxy_override"]})
+
+    if proxy_state.get("read_error"):
+        return build_health_check(
+            "system_proxy",
+            "系统代理",
+            "warn",
+            "读取系统代理设置时遇到异常。",
+            detail=proxy_state["read_error"],
+            action="如果你怀疑代理有问题，可以手动打开 Windows 代理设置检查。",
+            facts=facts,
+        )
+
+    if proxy_state.get("proxy_enable") and effective_target == capture_target:
+        if listener_state["reachable"]:
+            if runtime_state["summary"].get("is_refreshing"):
+                return build_health_check(
+                    "system_proxy",
+                    "系统代理",
+                    "pass",
+                    "系统代理当前临时指向本机 mitmproxy，且代理端口可用。",
+                    detail="这在 cv 模式采集进行中是正常现象。",
+                    action="等本轮采集结束后，系统代理应自动恢复。",
+                    facts=facts,
+                )
+            return build_health_check(
+                "system_proxy",
+                "系统代理",
+                "warn",
+                "系统代理仍然指向本机 mitmproxy。",
+                detail="如果这不是采集中间状态，通常说明上一次采集结束时没有完全恢复代理。",
+                action="如果长时间保持这样，先停止采集或手动关闭系统代理。",
+                facts=facts,
+            )
+
+        return build_health_check(
+            "system_proxy",
+            "系统代理",
+            "fail",
+            "系统代理指向本机 mitmproxy，但监听端口不可用。",
+            detail="这会导致微信或浏览器流量走到一个不可用的本地代理。",
+            action="先运行 start_mitmproxy_openid.ps1，或者手动关闭 Windows 系统代理。",
+            facts=facts,
+        )
+
+    if proxy_state.get("proxy_enable"):
+        return build_health_check(
+            "system_proxy",
+            "系统代理",
+            "pass",
+            "系统代理已启用，但没有卡在本机抓包代理上。",
+            detail="如果你本来就在使用其他代理，这通常是正常状态。",
+            facts=facts,
+        )
+
+    return build_health_check(
+        "system_proxy",
+        "系统代理",
+        "pass",
+        "系统代理未启用。",
+        facts=facts,
+    )
+
+
+def build_mitm_listener_health_check(runtime_state: Dict[str, Any], listener_state: Dict[str, Any]) -> Dict[str, Any]:
+    method = runtime_state["summary"].get("collector_method")
+    facts = [
+        {"label": "监听地址", "value": f"{listener_state['host']}:{listener_state['port']}"},
+        {"label": "mitmdump", "value": listener_state["mitmdump_path"]},
+        {"label": "结果文件", "value": listener_state["result_path"]},
+    ]
+    if method != "cv":
+        return build_health_check(
+            "mitm_listener",
+            "mitmproxy 监听",
+            "skip",
+            "当前运行方式不是 cv，不需要 mitmproxy。",
+            facts=facts,
+        )
+
+    if listener_state["reachable"]:
+        return build_health_check(
+            "mitm_listener",
+            "mitmproxy 监听",
+            "pass",
+            "本机 mitmproxy 监听端口可连接。",
+            detail="cv 模式采集时可以直接复用这个监听端口。",
+            facts=facts,
+        )
+
+    action = (
+        "先创建 .venv-mitm 并安装 mitmproxy，再运行 start_mitmproxy_openid.ps1。"
+        if not listener_state["mitmdump_exists"]
+        else "先运行 start_mitmproxy_openid.ps1，让 127.0.0.1:8080 开始监听。"
+    )
+    detail = (
+        "未找到 mitmdump 可执行文件。"
+        if not listener_state["mitmdump_exists"]
+        else "监听地址当前不可连接。"
+    )
+    return build_health_check(
+        "mitm_listener",
+        "mitmproxy 监听",
+        "fail",
+        "cv 模式需要的 mitmproxy 监听还没有就绪。",
+        detail=detail,
+        action=action,
+        facts=facts,
+    )
+
+
+def build_mitm_certificate_health_check(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    method = runtime_state["summary"].get("collector_method")
+    cert_state = inspect_mitm_certificate_state()
+    facts = [
+        {"label": "证书路径", "value": cert_state["cert_path"]},
+        {"label": "Thumbprint", "value": cert_state.get("thumbprint") or "-"},
+        {"label": "过期时间", "value": cert_state.get("not_after") or "-"},
+    ]
+
+    if method != "cv":
+        return build_health_check(
+            "mitm_cert",
+            "mitmproxy 证书",
+            "skip",
+            "当前运行方式不是 cv，不需要 mitmproxy 证书。",
+            facts=facts,
+        )
+
+    if not cert_state["exists"]:
+        return build_health_check(
+            "mitm_cert",
+            "mitmproxy 证书",
+            "fail",
+            "还没有找到 mitmproxy 根证书文件。",
+            detail="第一次运行 mitmproxy 之前，证书文件不会自动出现。",
+            action="先运行 .\\.venv-mitm\\Scripts\\mitmproxy.exe 生成证书，再执行 install_mitmproxy_cert.ps1。",
+            facts=facts,
+        )
+
+    if cert_state["trusted"]:
+        return build_health_check(
+            "mitm_cert",
+            "mitmproxy 证书",
+            "pass",
+            "mitmproxy 根证书已导入当前用户信任库。",
+            detail=cert_state.get("subject"),
+            facts=facts,
+        )
+
+    detail = cert_state.get("error") or "证书文件存在，但当前用户证书库里还没信任它。"
+    return build_health_check(
+        "mitm_cert",
+        "mitmproxy 证书",
+        "fail",
+        "mitmproxy 根证书还没有完成信任。",
+        detail=detail,
+        action="运行 .\\install_mitmproxy_cert.ps1，把 mitmproxy 根证书导入 CurrentUser\\Root。",
+        facts=facts,
+    )
+
+
+def build_cv_template_health_check(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    method = runtime_state["summary"].get("collector_method")
+    template_dir = Path(getattr(collector, "template_dir", BASE_DIR / "cv_templates"))
+    override_dir = Path(getattr(collector, "template_override_dir", BASE_DIR / "cv_templates_local"))
+    template_names = dict(
+        getattr(
+            collector,
+            "template_names",
+            {
+                "session": "session.png",
+                "menu_button": "student_button.png",
+                "menu_item": "all_item.png",
+                "close": "close_button.png",
+            },
+        )
+    )
+    facts = [
+        {"label": "默认目录", "value": str(template_dir)},
+        {"label": "本机覆盖", "value": str(override_dir)},
+        {"label": "模板数量", "value": str(len(template_names))},
+    ]
+
+    if method != "cv":
+        return build_health_check(
+            "cv_templates",
+            "CV 模板",
+            "skip",
+            "当前运行方式不是 cv，不需要模板文件。",
+            facts=facts,
+        )
+
+    missing_roles: List[str] = []
+    resolved_items: List[str] = []
+    override_hits = 0
+    for role, filename in template_names.items():
+        override_path = override_dir / filename
+        default_path = template_dir / filename
+        if override_path.exists():
+            override_hits += 1
+            resolved_items.append(f"{role}=本机覆盖")
+            continue
+        if default_path.exists():
+            resolved_items.append(f"{role}=默认模板")
+            continue
+        missing_roles.append(role)
+        resolved_items.append(f"{role}=缺失")
+
+    facts.append({"label": "覆盖命中", "value": str(override_hits)})
+    detail = "；".join(resolved_items)
+
+    if missing_roles:
+        return build_health_check(
+            "cv_templates",
+            "CV 模板",
+            "fail",
+            f"缺少 {len(missing_roles)} 个 cv 模板文件。",
+            detail=detail,
+            action="把缺少的模板补到 cv_templates 或 cv_templates_local 后再重试。",
+            facts=facts,
+        )
+
+    return build_health_check(
+        "cv_templates",
+        "CV 模板",
+        "pass",
+        "cv 模式需要的模板文件都已就绪。",
+        detail=detail,
+        action="如果按钮样式不匹配，再把本机模板补到 cv_templates_local。",
+        facts=facts,
+    )
+
+
+def build_openid_cache_health_check(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    facts = [{"label": "缓存路径", "value": str(OPENID_CACHE_PATH)}]
+    if not OPENID_CACHE_PATH.exists():
+        return build_health_check(
+            "openid_cache",
+            "OpenID 缓存",
+            "warn",
+            "还没有 latest_openid.json 缓存文件。",
+            detail="首次成功采集一次 OpenID 后，这里才会生成回退缓存。",
+            action="先至少成功采集一次 OpenID，后续服务才能在启动时回退到缓存。",
+            facts=facts,
+        )
+
+    try:
+        payload = json.loads(OPENID_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return build_health_check(
+            "openid_cache",
+            "OpenID 缓存",
+            "fail",
+            "缓存文件存在，但无法读取。",
+            detail=str(exc),
+            action="删除损坏的 latest_openid.json 后重新采集一次 OpenID。",
+            facts=facts,
+        )
+
+    openid = str(payload.get("openid") or "").strip()
+    facts.extend(
+        [
+            {"label": "缓存来源", "value": str(payload.get("source") or "-")},
+            {"label": "采集时间", "value": str(payload.get("captured_at") or "-")},
+            {"label": "OpenID", "value": mask_openid(openid) or "-"},
+        ]
+    )
+
+    if not OPENID_HEX_RE.fullmatch(openid):
+        return build_health_check(
+            "openid_cache",
+            "OpenID 缓存",
+            "fail",
+            "缓存文件存在，但其中的 OpenID 格式无效。",
+            action="重新采集一次 OpenID，让缓存文件被覆盖成有效内容。",
+            facts=facts,
+        )
+
+    current_source = runtime_state["openid_status"].get("current_source")
+    detail = "当前服务正在使用这条缓存回退。" if current_source == "file" else "这条缓存可在下次启动失败时作为回退。"
+    return build_health_check(
+        "openid_cache",
+        "OpenID 缓存",
+        "pass",
+        "已找到可用的 OpenID 缓存文件。",
+        detail=detail,
+        facts=facts,
+    )
+
+
+def summarize_health_checks(checks: List[Dict[str, Any]], runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    counts = {"pass": 0, "warn": 0, "fail": 0, "skip": 0}
+    for check in checks:
+        status = check.get("status") or "warn"
+        counts[status] = counts.get(status, 0) + 1
+
+    first_fail = next((item for item in checks if item.get("status") == "fail"), None)
+    first_warn = next((item for item in checks if item.get("status") == "warn"), None)
+
+    if counts["fail"] > 0:
+        overall_status = "blocked"
+        tone = "danger"
+        title = "还有关键部署步骤未完成"
+        description = f"发现 {counts['fail']} 项关键检查未通过，当前还不适合依赖自动化稳定运行。"
+        next_action = (first_fail or first_warn or {}).get("action") or "优先处理第一项失败检查。"
+    elif counts["warn"] > 0:
+        overall_status = "attention"
+        tone = "warning"
+        title = "环境基本可用，但还有注意项"
+        description = f"关键能力大体已具备，但还有 {counts['warn']} 项建议处理。"
+        next_action = (first_warn or {}).get("action") or "优先处理带黄色提示的检查项。"
+    else:
+        overall_status = "ready"
+        tone = "success"
+        title = "部署环境已就绪"
+        description = "关键检查都已通过，可以回首页继续使用。"
+        next_action = "可以返回首页继续监听和签到。"
+
+    return {
+        "overall_status": overall_status,
+        "tone": tone,
+        "title": title,
+        "description": description,
+        "next_action": next_action,
+        "counts": counts,
+        "collector_method": runtime_state["summary"].get("collector_method"),
+    }
+
+
+def build_health_report() -> Dict[str, Any]:
+    runtime_state = build_runtime_state()
+    listener_state = inspect_capture_proxy_listener_state()
+    checks = [
+        build_runtime_health_check(runtime_state),
+        build_python_environment_health_check(),
+        build_wechat_health_check(runtime_state),
+        build_system_proxy_health_check(runtime_state, listener_state),
+        build_mitm_listener_health_check(runtime_state, listener_state),
+        build_mitm_certificate_health_check(runtime_state),
+        build_cv_template_health_check(runtime_state),
+        build_openid_cache_health_check(runtime_state),
+    ]
+    checks.sort(key=lambda item: (HEALTH_STATUS_ORDER.get(item.get("status"), 99), item.get("title", "")))
+    return {
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "runtime_state": runtime_state,
+        "summary": summarize_health_checks(checks, runtime_state),
+        "checks": checks,
+    }
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/health")
+def health():
+    return render_template("health.html")
 
 
 @app.route("/api/login", methods=["POST"])
@@ -1454,6 +2208,12 @@ def logout():
 def openid_status():
     ensure_runtime_initialized()
     return jsonify(build_openid_status_payload(build_runtime_state()))
+
+
+@app.route("/api/health")
+def health_status():
+    ensure_runtime_initialized()
+    return jsonify(build_health_report())
 
 
 @app.route("/api/runtime_state")
