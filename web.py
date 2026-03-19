@@ -1346,10 +1346,102 @@ def get_runtime_current_sign(pipeline_state: Dict[str, Any]) -> Optional[Dict[st
     return pipeline_state.get("current_sign")
 
 
+def build_frontend_mitm_state(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    method = runtime_state["summary"].get("collector_method")
+    if method != "cv":
+        return {
+            "required": False,
+            "status": "skip",
+            "summary": "当前模式不需要 mitmproxy。",
+            "detail": "旧版微信的 uiautomation 模式不会依赖本地抓包代理。",
+            "endpoint": None,
+            "mitmdump_exists": None,
+        }
+
+    listener_state = inspect_capture_proxy_listener_state()
+    endpoint = f"{listener_state['host']}:{listener_state['port']}"
+    if listener_state["reachable"]:
+        return {
+            "required": True,
+            "status": "pass",
+            "summary": "mitmproxy 监听正常。",
+            "detail": f"当前可连接到 {endpoint}。",
+            "endpoint": endpoint,
+            "mitmdump_exists": listener_state["mitmdump_exists"],
+        }
+
+    if listener_state["mitmdump_exists"]:
+        return {
+            "required": True,
+            "status": "fail",
+            "summary": "mitmproxy 还没有启动。",
+            "detail": f"{endpoint} 当前不可连接，cv 模式无法抓取新的 OpenID。",
+            "endpoint": endpoint,
+            "mitmdump_exists": True,
+        }
+
+    return {
+        "required": True,
+        "status": "fail",
+        "summary": "还没有找到 mitmproxy 环境。",
+        "detail": "未检测到 mitmdump，可先创建 .venv-mitm 并安装 mitmproxy。",
+        "endpoint": endpoint,
+        "mitmdump_exists": False,
+    }
+
+
+def build_frontend_home_status(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    summary = runtime_state["summary"]
+    openid_state = runtime_state["openid_status"]
+    method = summary.get("collector_method")
+    mitm_state = build_frontend_mitm_state(runtime_state)
+    last_error = openid_state.get("last_error")
+
+    if summary["session_valid"] and not openid_state.get("used_file_fallback"):
+        readiness = "ready"
+        title = "现在可以直接用"
+        description = "当前已经拿到有效 OpenID，首页会继续自动监听新的签到任务。"
+        next_action = "保持微信和本页面打开即可。"
+    elif summary["session_valid"] and openid_state.get("used_file_fallback"):
+        readiness = "attention"
+        title = "当前能用，但依赖缓存回退"
+        description = "服务已经恢复到可用状态，不过这次不是刚采到的新 OpenID。"
+        next_action = "如果想恢复自动采集，先把微信退回到微助教聊天页，再点上方环境体检或刷新。"
+    elif method == "cv" and mitm_state["status"] == "fail" and not summary["has_openid"]:
+        readiness = "blocked"
+        title = "现在还不能稳定使用"
+        description = "当前是新版微信 cv 模式，但抓包链路还没就绪，所以拿不到新的 OpenID。"
+        next_action = "先启动 mitmproxy，必要时再打开环境体检页逐项检查。"
+    elif summary["is_refreshing"]:
+        readiness = "attention"
+        title = "正在准备自动监听"
+        description = "系统正在自动获取 OpenID，这一轮完成后会继续进入监听状态。"
+        next_action = "保持微信窗口可见，等待本轮刷新完成。"
+    elif last_error:
+        readiness = "blocked"
+        title = "当前自动化链路有阻塞"
+        description = "服务已经启动，但最近一次自动获取 OpenID 失败了。"
+        next_action = "优先查看最近错误、mitm 状态和环境体检页给出的下一步。"
+    else:
+        readiness = "attention"
+        title = "还在等待运行条件满足"
+        description = "服务本身已启动，但现在还没有拿到可用 OpenID。"
+        next_action = "打开微信并进入微助教服务号聊天页，然后再刷新首页。"
+
+    return {
+        "readiness": readiness,
+        "title": title,
+        "description": description,
+        "next_action": next_action,
+        "mitm": mitm_state,
+    }
+
+
 def build_frontend_status_payload(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
     pipeline_state = dict(runtime_state["pipeline_status"])
     pipeline_state["openid_status"] = runtime_state["openid_status"]
     pipeline_state["runtime_summary"] = runtime_state["summary"]
+    pipeline_state["home_status"] = build_frontend_home_status(runtime_state)
     pipeline_state["generated_at"] = runtime_state["generated_at"]
     return pipeline_state
 

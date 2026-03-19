@@ -52,6 +52,30 @@
 
         <section class="notice-banner hidden reveal" id="notice-banner" aria-live="polite"></section>
 
+        <section class="status-glance-grid reveal" aria-label="运行状态总览">
+            <article class="status-glance-card status-glance-card--primary">
+                <span class="overview-label">当前可用性</span>
+                <strong class="overview-value" id="readiness-summary">正在检测</strong>
+                <p class="overview-note" id="readiness-note">这里会直接告诉你现在能不能用，以及为什么。</p>
+                <p class="status-glance-action" id="readiness-action">等待状态刷新</p>
+            </article>
+            <article class="status-glance-card">
+                <span class="overview-label">刷新节奏</span>
+                <strong class="overview-value" id="refresh-summary">等待中</strong>
+                <p class="overview-note" id="refresh-note">会显示上次刷新和下一次计划刷新时间。</p>
+            </article>
+            <article class="status-glance-card">
+                <span class="overview-label">采集链路</span>
+                <strong class="overview-value" id="collector-summary">等待中</strong>
+                <p class="overview-note" id="collector-note">这里会显示当前方式、来源以及是否在使用缓存回退。</p>
+            </article>
+            <article class="status-glance-card">
+                <span class="overview-label">mitm 状态</span>
+                <strong class="overview-value" id="mitm-summary">等待中</strong>
+                <p class="overview-note" id="mitm-note">新版微信会显示本机抓包链路是否可用。</p>
+            </article>
+        </section>
+
         <section class="overview-grid reveal" aria-label="概览">
             <article class="overview-card">
                 <span class="overview-label">OpenID</span>
