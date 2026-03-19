@@ -11,6 +11,7 @@ import queue
 import re
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 import sys
@@ -1881,15 +1882,36 @@ def is_tcp_endpoint_reachable(host: str, port: int, timeout_seconds: float = 1.0
 
 
 def run_powershell_json(script: str, args: List[str], timeout_seconds: float = 8.0) -> Dict[str, Any]:
-    completed = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script, *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout_seconds,
-        check=False,
-    )
+    temp_script_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".ps1", delete=False) as temp_script:
+            temp_script.write("param([string[]]$PythonArgs)\n")
+            temp_script.write("Set-Variable -Name args -Value $PythonArgs -Scope Local\n")
+            temp_script.write(script)
+            temp_script_path = temp_script.name
+
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                temp_script_path,
+                *args,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+            check=False,
+        )
+    finally:
+        if temp_script_path:
+            Path(temp_script_path).unlink(missing_ok=True)
+
     stdout_lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
     if completed.returncode != 0:
         error_text = completed.stderr.strip() or (stdout_lines[-1] if stdout_lines else "") or f"powershell exited {completed.returncode}"
