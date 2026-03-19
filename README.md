@@ -135,25 +135,47 @@ pip install -r requirements.txt
 - `mitmproxy` 会引入自己的依赖版本，和当前 Flask 运行环境冲突的概率较高
 - `mitmproxy` 建议单独放到 `.venv-mitm`
 
-## 二、可选配置 PushPlus
+## 二、可选本地配置
 
-二维码推送支持两种配置方式：
+当前服务的运行配置支持三层来源：
 
 - 环境变量
 - 本地配置文件 `local_config.json`
+- 内置默认值
 
 优先级：
 
 - 环境变量优先
-- 如果环境变量没配，再读取 [local_config.json](local_config.json)
+- 如果环境变量没配，再读取 `local_config.json`
+- 如果本地配置也没配，再回落到默认值
 
-示例：
+推荐把“这台机器特有”的设置放进 `local_config.json`，例如：
+
+- PushPlus token / topic
+- 默认运行方式
+- 微信会话名和按钮文案
+- `cv` 模板目录、代理与窗口配置
+- `mitmproxy` 输出文件和目标域名
+
+建议的 JSON 结构示例见 [local_config.example.json](local_config.example.json)。
+
+一个最常见的示例：
 
 ```json
 {
+  "wechat": {
+    "openid_method": "cv",
+    "session_name": "微助教服务号"
+  },
   "pushplus": {
     "token": "你的PushPlusToken",
     "topic": "可选的群组编码"
+  },
+  "cv": {
+    "template_override_dir": "cv_templates_local"
+  },
+  "mitmproxy": {
+    "output_path": "logs/mitm_openid_result.txt"
   }
 }
 ```
@@ -352,6 +374,15 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 ```
 
 ## 七、可配置项
+
+下面列的是环境变量名；如果你更倾向于写 `local_config.json`，可按这些路径组织：
+
+- `wechat.*`：主服务和旧版微信自动化相关配置
+- `pushplus.*`：PushPlus 推送配置
+- `cv.*`：新版微信 `cv` 采集配置
+- `cv.templates.*`：模板文件名
+- `cv.regions.*`：模板搜索区域覆盖
+- `mitmproxy.*`：抓包输出、证书和目标域名配置
 
 ### 主服务相关
 

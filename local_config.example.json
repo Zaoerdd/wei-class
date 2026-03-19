@@ -1,6 +1,36 @@
 {
+  "wechat": {
+    "openid_method": "uiautomation",
+    "session_name": "微助教服务号",
+    "menu_button": "学生",
+    "menu_item": "全部",
+    "control_timeout_seconds": 10,
+    "browser_timeout_seconds": 15
+  },
   "pushplus": {
     "token": "",
     "topic": ""
+  },
+  "cv": {
+    "template_override_dir": "cv_templates_local",
+    "match_threshold": 0.82,
+    "template_scales": [
+      1.0,
+      1.25,
+      1.5,
+      1.75,
+      2.0
+    ],
+    "auto_switch_system_proxy": true,
+    "templates": {
+      "session": "session.png",
+      "menu_button": "student_button.png",
+      "menu_item": "all_item.png",
+      "close": "close_button.png"
+    }
+  },
+  "mitmproxy": {
+    "output_path": "logs/mitm_openid_result.txt",
+    "target_domain": "v18.teachermate.cn"
   }
 }

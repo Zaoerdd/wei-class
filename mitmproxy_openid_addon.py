@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import urllib.parse
 from datetime import datetime
@@ -9,19 +8,16 @@ from pathlib import Path
 from typing import Optional
 
 from mitmproxy import http
+from runtime_config import get_runtime_settings
 
 OPENID_JSON_RE = re.compile(r'["\']openid["\']\s*:\s*["\']([^"\']+)["\']', re.IGNORECASE)
 
 
 class OpenIDInterceptor:
     def __init__(self) -> None:
-        self.target_domain = os.getenv("WECHAT_MITM_TARGET_DOMAIN", "v18.teachermate.cn").strip()
-        self.output_path = Path(
-            os.getenv(
-                "WECHAT_MITM_OUTPUT_PATH",
-                Path(__file__).resolve().parent / "logs" / "mitm_openid_result.txt",
-            )
-        )
+        runtime_settings = get_runtime_settings(reload=True)
+        self.target_domain = runtime_settings.get("mitm.target_domain")
+        self.output_path = runtime_settings.get("mitm.output_path")
 
     def response(self, flow: http.HTTPFlow) -> None:
         if self.target_domain and self.target_domain not in flow.request.pretty_host:
