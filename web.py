@@ -500,13 +500,28 @@ class PushPlusNotifier:
             self._sent_cache.pop(key, None)
 
 
+PIPELINE_WATCHDOG_TICKS = 15  # scheduler loop ticks, about 1 s each
+PIPELINE_HANDOVER_TIMEOUT = 30
+PIPELINE_ERROR_BACKOFF_MAX = 60
+SIGN_IN_SHUTDOWN_GRACE = 15
+SIGN_STATE_RETENTION_SECONDS = 3600
+WS_RECONNECT_DELAY_SECONDS = 5
+
+
 class Pipeline:
-    def __init__(self, openid: str, profile: Optional[Dict[str, Any]] = None):
+    def __init__(self, openid: str, profile: Optional[Dict[str, Any]] = None,
+                 predecessor: Optional[threading.Thread] = None):
         self.openid = openid
         self.profile = profile
         self.message: Optional[str] = "初始化中..."
         self.is_running = False
+        self.thread: Optional[threading.Thread] = None
+        self._predecessor = predecessor
         self.websocket_clients: List[TeacherMateWebSocketClient] = []
+        self.ws_sign_keys: Set[Tuple[Any, Any]] = set()
+        self.ws_ended_at: Dict[Tuple[Any, Any], float] = {}
+        self.sign_last_seen: Dict[Tuple[Any, Any], float] = {}
+        self.sign_tasks: Set[asyncio.Task] = set()
         self.asyncio_tasks: List[asyncio.Task] = []
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.shutdown_event = threading.Event()
@@ -524,6 +539,7 @@ class Pipeline:
             return
         self.is_running = True
         thread = threading.Thread(target=self._run_async, daemon=True, name=f"Pipeline-{self.openid[-4:]}")
+        self.thread = thread
         thread.start()
         logger.info("用户 %s 的监听管道已启动", mask_openid(self.openid))
 
@@ -532,40 +548,81 @@ class Pipeline:
         self.is_running = False
 
     def _run_async(self) -> None:
+        if self._predecessor is not None:
+            # A stopped listener for the same account may still be finishing a
+            # sign-in request; overlapping loops could submit the same sign twice.
+            self._predecessor.join(PIPELINE_HANDOVER_TIMEOUT)
+            if self._predecessor.is_alive():
+                logger.warning("上一个监听管道仍未退出，继续启动: %s", mask_openid(self.openid))
+            self._predecessor = None
         try:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
             self.loop.run_until_complete(self._main_async())
         except Exception as exc:
-            logger.error("异步运行失败 %s: %s", self.openid, exc)
+            logger.error("异步运行失败 %s: %s", mask_openid(self.openid), exc)
         finally:
-            self.is_running = False
             if self.loop and not self.loop.is_closed():
+                try:
+                    # Let in-flight to_thread work (e.g. a sign-in POST) finish before
+                    # this thread ends, so a successor's handover join covers it.
+                    self.loop.run_until_complete(self.loop.shutdown_default_executor(timeout=PIPELINE_HANDOVER_TIMEOUT))
+                except Exception as exc:
+                    logger.warning("等待后台请求结束失败: %s", exc)
                 self.loop.close()
+            self.is_running = False
+
+    async def _sleep_unless_stopped(self, seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while not self.shutdown_event.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(min(1.0, deadline - time.monotonic()))
 
     async def _main_async(self) -> None:
+        failures = 0
         try:
             while not self.shutdown_event.is_set():
-                data = await self.wait_data()
-                if self.shutdown_event.is_set():
-                    break
+                # One bad iteration (e.g. "database is locked") must not end the listener.
+                try:
+                    data = await self.wait_data()
+                    if self.shutdown_event.is_set():
+                        break
+                    self._prune_stale_sign_state({get_sign_key(item) for item in self.active_signs})
 
-                if isinstance(data, list) and data:
-                    self.message = "检测到签到任务，正在处理中..."
-                    await self.process_signatures(data)
-                else:
-                    self.message = data if isinstance(data, str) else "暂无活跃签到"
-
-                await asyncio.sleep(2)
-        except Exception as exc:
-            logger.error("主循环失败: %s", exc)
-            self.message = f"错误: {exc}"
+                    if isinstance(data, list) and data:
+                        self.message = "检测到签到任务，正在处理中..."
+                        await self.process_signatures(data)
+                    else:
+                        self.message = data if isinstance(data, str) else "暂无活跃签到"
+                    failures = 0
+                    delay = 2.0
+                except Exception as exc:
+                    failures += 1
+                    delay = min(PIPELINE_ERROR_BACKOFF_MAX, 2.0 * 2 ** failures)
+                    logger.exception("监听循环出错，%.0f 秒后重试", delay)
+                    self.message = f"监听出错，{delay:.0f} 秒后自动重试: {exc}"
+                await self._sleep_unless_stopped(delay)
         finally:
             await self.shutdown()
 
+    def _prune_stale_sign_state(self, active_keys: Set[Tuple[Any, Any]]) -> None:
+        # Keep per-sign state for a while after a sign disappears (it may come back
+        # briefly), then drop it so a long-running listener does not grow unbounded.
+        now = time.monotonic()
+        for key in active_keys:
+            self.sign_last_seen[key] = now
+        stale = {key for key, seen in self.sign_last_seen.items() if now - seen >= SIGN_STATE_RETENTION_SECONDS}
+        stale -= self.pending_sign_keys | self.qr_auto_pending | self.ws_sign_keys
+        if not stale:
+            return
+        # Rebuild instead of deleting in place: Flask threads read these concurrently.
+        self.sign_last_seen = {k: v for k, v in self.sign_last_seen.items() if k not in stale}
+        self.sign_results = {k: v for k, v in self.sign_results.items() if k not in stale}
+        self.qr_auto_attempts = {k: v for k, v in self.qr_auto_attempts.items() if k not in stale}
+        self.ws_ended_at = {k: v for k, v in self.ws_ended_at.items() if k not in stale}
+
     async def wait_data(self) -> Any:
         try:
-            data = getData(self.openid)
+            data = await asyncio.to_thread(getData, self.openid)
             if data and isinstance(data, list) and len(data) > 0:
                 self.invalid_openid_refresh_requested = False
                 result = []
@@ -622,16 +679,21 @@ class Pipeline:
             if self.shutdown_event.is_set():
                 return
             sign_key = get_sign_key(item)
-            if local_state.has_success(self.openid, self.profile, *sign_key):
+            if await asyncio.to_thread(local_state.has_success, self.openid, self.profile, *sign_key):
                 self._store_result_meta(sign_key, build_result_meta(
                     item, "本机记录显示此签到已成功完成", sign_completed=True, result_ready=True,
                     frontend_message="本机记录显示此签到已成功完成"))
                 continue
 
             if item.get("isQR"):
-                if any(ws.sign_id == item["signId"] and not ws.is_shutting_down for ws in self.websocket_clients):
+                # Reserved before the task starts: the handshake now runs off-loop,
+                # so the next poll must not open a second client for this sign.
+                ended_at = self.ws_ended_at.get(sign_key)
+                if sign_key in self.ws_sign_keys or (
+                        ended_at is not None and time.monotonic() - ended_at < WS_RECONNECT_DELAY_SECONDS):
                     continue
 
+                self.ws_sign_keys.add(sign_key)
                 self.message = "检测到二维码签到，正在获取二维码..."
                 task = asyncio.create_task(self.run_websocket_client(item))
                 self._track_task(task)
@@ -643,6 +705,8 @@ class Pipeline:
             self.pending_sign_keys.add(sign_key)
             self.message = f"检测到 {item.get('signType') or '普通签到'}，正在自动签到..."
             task = asyncio.create_task(self.run_common_sign(item))
+            self.sign_tasks.add(task)
+            task.add_done_callback(self.sign_tasks.discard)
             self._track_task(task)
 
     def _track_task(self, task: asyncio.Task) -> None:
@@ -774,12 +838,14 @@ class Pipeline:
         result_meta["signed_students"] = signed_students
 
     async def run_websocket_client(self, item: Dict[str, Any]) -> None:
-        if self.shutdown_event.is_set():
-            return
+        sign_key = get_sign_key(item)
         sign_id = item["signId"]
         course_id = item["courseId"]
+        client = None
         try:
-            client_id = ad.creatClientId(sign_id, courseId=course_id)
+            if self.shutdown_event.is_set():
+                return
+            client_id = await asyncio.to_thread(ad.creatClientId, sign_id, courseId=course_id)
             client = TeacherMateWebSocketClient(
                 sign_id=sign_id,
                 course_id=course_id,
@@ -792,6 +858,13 @@ class Pipeline:
             await client.start()
         except Exception as exc:
             logger.error("WebSocket 客户端错误: %s", exc)
+        finally:
+            # However the client ended (server closed it, errors, retries used up),
+            # release the sign so the next poll reconnects while it is still active.
+            if client in self.websocket_clients:
+                self.websocket_clients.remove(client)
+            self.ws_sign_keys.discard(sign_key)
+            self.ws_ended_at[sign_key] = time.monotonic()
 
     async def run_common_sign(self, item: Dict[str, Any]) -> None:
         sign_key = get_sign_key(item)
@@ -800,7 +873,8 @@ class Pipeline:
                 return
             lat = safe_float(item.get("lat", item.get("latitude")), 0.0)
             lon = safe_float(item.get("lon", item.get("longitude")), 0.0)
-            sign_result = submit_sign(
+            sign_result = await asyncio.to_thread(
+                submit_sign,
                 self.openid,
                 item["courseId"],
                 item["signId"],
@@ -973,7 +1047,11 @@ class Pipeline:
 
     async def shutdown(self) -> None:
         self.shutdown_event.set()
-        for client in self.websocket_clients:
+        if self.sign_tasks:
+            # Let in-flight sign-in requests finish so their result is recorded;
+            # cancelling would drop a success and let the next listener resubmit.
+            await asyncio.wait(list(self.sign_tasks), timeout=SIGN_IN_SHUTDOWN_GRACE)
+        for client in list(self.websocket_clients):
             if not client.is_shutting_down:
                 await client.graceful_shutdown()
         for task in list(self.asyncio_tasks):
@@ -1029,6 +1107,8 @@ class Pipeline:
 
 
 active_pipelines: Dict[str, Pipeline] = {}
+# Last listener thread per account, so a replacement can wait for it to exit.
+last_pipeline_threads: Dict[str, threading.Thread] = {}
 active_pipeline_lock = threading.RLock()
 
 
@@ -1054,9 +1134,10 @@ def get_or_create_pipeline(openid: str, profile: Optional[Dict[str, Any]] = None
                 pipeline.profile = profile
             return pipeline
 
-        pipeline = Pipeline(openid, profile=profile)
+        pipeline = Pipeline(openid, profile=profile, predecessor=last_pipeline_threads.get(openid))
         active_pipelines[openid] = pipeline
         pipeline.start()
+        last_pipeline_threads[openid] = pipeline.thread
         return pipeline
 
 
@@ -1113,11 +1194,27 @@ class OpenIdRefreshManager:
         self._thread.start()
 
     def _run_loop(self) -> None:
+        ticks = 0
         while not self._stop_event.wait(1.0):
             with self._state_lock:
                 due = self.listening_enabled and time.monotonic() >= self._next_refresh_deadline
             if due:
                 self.refresh_openid(reason="scheduled", allow_file_fallback=False)
+            ticks += 1
+            if ticks % PIPELINE_WATCHDOG_TICKS == 0:
+                self._restart_dead_pipeline()
+
+    def _restart_dead_pipeline(self) -> None:
+        # A listener thread that died unexpectedly would otherwise stay dead until
+        # the next OpenID refresh, which can be up to 2 hours away.
+        with self._state_lock:
+            if not self.listening_enabled or not self.current_openid:
+                return
+            pipeline = get_pipeline(self.current_openid)
+            if pipeline and pipeline.is_running:
+                return
+            logger.warning("监听管道已停止，正在重新启动: %s", mask_openid(self.current_openid))
+            activate_pipeline_for_openid(self.current_openid, self.current_profile)
 
     def refresh_openid(self, reason: str, allow_file_fallback: bool, _reserved: bool = False) -> bool:
         if not _reserved and not self._refresh_lock.acquire(blocking=False):

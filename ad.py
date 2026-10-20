@@ -18,8 +18,11 @@ def creatClientId(signId, courseId):
         "id": "1"
     }
     ]
-    response = requests.post(ws_url, json=post_data,verify=True)
-    clientId = json.loads(response.text)[0]["clientId"]
+    response = requests.post(ws_url, json=post_data, verify=True, timeout=10)
+    handshake = json.loads(response.text)
+    if not isinstance(handshake, list) or not handshake or not handshake[0].get("clientId"):
+        raise RuntimeError(f"Faye 握手失败: {str(handshake)[:200]}")
+    clientId = handshake[0]["clientId"]
     signId = signId
     f = [
     {
@@ -38,7 +41,7 @@ def creatClientId(signId, courseId):
     "id": "3"
     }
     ]
-    r = requests.post(ws_url, json=f,verify=True)
+    r = requests.post(ws_url, json=f, verify=True, timeout=10)
     j = json.loads(r.text)
     return clientId
 if __name__ == '__main__':
