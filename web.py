@@ -30,7 +30,7 @@ from wechat_openid_collector import (
     OpenIdCollectorError,
     build_logger as build_collector_logger,
 )
-from wechat_openid_strategy import build_openid_collector, normalize_openid_method
+from wechat_openid_strategy import build_openid_collector, normalize_openid_method, recover_stale_capture_proxy
 from wechat_qr_sign import WECHAT_UI_LOCK, WeChatQrSigner, validate_qr_url
 from local_state import LocalState
 
@@ -1413,6 +1413,10 @@ def ensure_runtime_initialized() -> None:
             return
         if openid_refresh_manager is None:
             raise RuntimeError("OpenID runtime is not configured")
+        try:
+            recover_stale_capture_proxy(collector_logger)
+        except Exception as exc:
+            logger.error("恢复上次残留的系统代理失败: %s", exc)
         openid_refresh_manager.start()
         runtime_initialized = True
 

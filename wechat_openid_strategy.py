@@ -10,7 +10,7 @@ import socket
 import time
 import winreg
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
@@ -199,6 +199,7 @@ class CVWeChatOpenIdCollector:
         self._numpy = None
         self._mss = None
         self._scaled_template_dir = self.base_dir / "logs" / "cv_template_cache"
+        self.proxy_snapshot_path = self.base_dir / "logs" / "proxy_snapshot.json"
 
     def run_once(self) -> dict:
         self.logger.info("starting one cv collection run")
@@ -547,6 +548,9 @@ class CVWeChatOpenIdCollector:
             return
 
         target_proxy = f"{self.capture_proxy_host}:{self.capture_proxy_port}"
+        # A capture proxy left behind by a killed run must not be mistaken for
+        # the user's original setting, or it would never be restored.
+        self.recover_stale_capture_proxy()
         self.ensure_capture_proxy_ready(target_proxy)
         original = self._read_system_proxy_settings()
 
@@ -560,15 +564,51 @@ class CVWeChatOpenIdCollector:
             original.proxy_server or "<disabled>",
             target_proxy,
         )
-        self._apply_capture_proxy(target_proxy)
+        self._save_proxy_snapshot(original, target_proxy)
         try:
+            self._apply_capture_proxy(target_proxy)
             yield
         finally:
             try:
                 self._restore_system_proxy_settings(original)
+                self.proxy_snapshot_path.unlink(missing_ok=True)
                 self.logger.info("system proxy restored to %s", original.proxy_server or "<disabled>")
             except Exception as exc:
-                self.logger.error("failed to restore system proxy: %s", exc)
+                self.logger.error("failed to restore system proxy, snapshot kept at %s: %s",
+                                  self.proxy_snapshot_path, exc)
+
+    def _save_proxy_snapshot(self, original: ProxySettingsSnapshot, target_proxy: str) -> None:
+        # Written before switching so the next start or stop_local.ps1 can undo
+        # the switch even if this process is killed mid-capture.
+        self.proxy_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.proxy_snapshot_path.with_suffix(".tmp")
+        temp_path.write_text(json.dumps({"target_proxy": target_proxy, "original": asdict(original)}),
+                             encoding="utf-8")
+        os.replace(temp_path, self.proxy_snapshot_path)
+
+    def recover_stale_capture_proxy(self) -> bool:
+        path = self.proxy_snapshot_path
+        if not path.exists():
+            return False
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            original = ProxySettingsSnapshot(**payload["original"])
+            target_proxy = str(payload["target_proxy"])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.logger.error("proxy snapshot %s is unreadable, left in place: %s", path, exc)
+            return False
+
+        current = self._read_system_proxy_settings()
+        restored = bool(current.proxy_enable and self._proxy_matches(current.proxy_server, target_proxy))
+        if restored:
+            self._restore_system_proxy_settings(original)
+            self.logger.warning("system proxy restored to %s after an interrupted capture run",
+                                original.proxy_server or "<disabled>")
+        else:
+            # The user changed the proxy since; never overwrite their setting.
+            self.logger.info("system proxy no longer points to %s, discarding stale snapshot", target_proxy)
+        path.unlink(missing_ok=True)
+        return restored
 
     def ensure_capture_proxy_ready(self, target_proxy: str) -> None:
         try:
@@ -964,3 +1004,8 @@ def build_openid_collector(method: Optional[str], config: CollectorConfig, logge
     collector = WeChatOpenIdCollector(config, logger)
     setattr(collector, "method_name", "uiautomation")
     return collector
+
+
+def recover_stale_capture_proxy(logger: logging.Logger) -> bool:
+    """Undo a system proxy switch left by a killed capture run; used at startup and by stop_local.ps1."""
+    return CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=0), logger).recover_stale_capture_proxy()

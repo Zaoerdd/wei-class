@@ -1,10 +1,6 @@
 param([int]$Port = 5000, [int]$CapturePort = 18080)
 $ErrorActionPreference = "Stop"
 $rootDir = $PSScriptRoot
-$proxySettings = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-if ($proxySettings.ProxyEnable -and $proxySettings.ProxyServer -eq "127.0.0.1:$CapturePort") {
-    throw "Capture proxy is in use. Wait for collection and proxy restoration before stopping."
-}
 # Wait for collection to finish so its finally block can restore the system proxy.
 try {
     $status = Invoke-RestMethod "http://127.0.0.1:$Port/api/openid_status" -TimeoutSec 3
@@ -27,5 +23,20 @@ if (Test-Path -LiteralPath $pidPath) {
 }
 foreach ($name in @("web.pid", "mitmproxy.pid")) {
     Remove-Item -LiteralPath (Join-Path $rootDir "logs\$name") -Force -ErrorAction SilentlyContinue
+}
+# A capture run killed mid-way leaves the system proxy on the stopped capture port; undo it from the snapshot.
+$venvPython = Join-Path $rootDir ".venv\Scripts\python.exe"
+if ((Test-Path -LiteralPath (Join-Path $rootDir "logs\proxy_snapshot.json")) -and (Test-Path -LiteralPath $venvPython)) {
+    Push-Location $rootDir
+    try {
+        & $venvPython -c "import logging, sys; log = logging.getLogger('stop_local'); log.addHandler(logging.StreamHandler(sys.stdout)); log.setLevel(logging.INFO); import wechat_openid_strategy as s; s.recover_stale_capture_proxy(log)"
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Restoring the system proxy from logs\proxy_snapshot.json failed." }
+    } finally {
+        Pop-Location
+    }
+}
+$proxySettings = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+if ($proxySettings.ProxyEnable -and $proxySettings.ProxyServer -eq "127.0.0.1:$CapturePort") {
+    Write-Warning "System proxy still points to the stopped capture proxy 127.0.0.1:$CapturePort. Turn it off in Windows Settings > Network > Proxy."
 }
 Write-Host "wei-class stopped."

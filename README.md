@@ -29,7 +29,7 @@
 - 网页地址：<http://127.0.0.1:5000/>；本机入口使用 `WECHAT_CV_OPENID_SOURCE=browser`，不启动抓包代理、不切换系统代理。独立 mitmproxy 环境仍保留，供其他版本微信使用。
 - `start_local.ps1` 可传入 `-Port`、`-CapturePort` 改端口；改端口后请向 `stop_local.ps1` 传入相同参数。
 - 如需使用原抓包方式，运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\start_local.ps1 -OpenIdSource mitmproxy`，默认抓包端口为 18080。
-- 双击 `停止服务.bat`：运行 `stop_local.ps1`，停止此目录下的服务和抓包代理。正在采集时请等待完成，让程序先恢复系统代理。
+- 双击 `停止服务.bat`：运行 `stop_local.ps1`，停止此目录下的服务和抓包代理。正在采集时请等待完成，让程序先恢复系统代理。如果服务在采集中途被强制结束，系统代理可能还指向抓包端口，下次启动服务或运行 `stop_local.ps1` 时会根据 `logs/proxy_snapshot.json` 自动恢复原代理。
 - 服务在后台运行，输出位于 `logs/web.stdout.log`、`logs/web.stderr.log`、`logs/mitmproxy.stdout.log`、`logs/mitmproxy.stderr.log`。
 - 手动使用抓包方案时，抓包代理自动串接启动时已有的系统代理，仅对配置的微助教域名解密；采集结束会恢复原系统代理。
 - 自动获取登录信息失败后，依次等待 30 秒、60 秒、120 秒再试；后续持续失败则每 5 分钟重试。成功后恢复每 2 小时刷新。页面显示实际下次重试时间；等待期间若没有有效登录信息，签到监听暂停。保持微信登录，程序会自动恢复窗口并寻找微助教入口；不要在采集时切换窗口。
@@ -498,6 +498,15 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 ```json
 {"captured_at":"2026-03-19T13:28:59.104450+08:00","openid":"fedcba9876543210fedcba9876543210","source":"url","url":"https://v18.teachermate.cn/wechat-pro-ssr/?openid=fedcba9876543210fedcba9876543210&from=wzj","host":"v18.teachermate.cn"}
 ```
+
+### `logs/proxy_snapshot.json`
+
+只在 mitmproxy 模式下使用。切换系统代理前，程序会把原来的代理设置保存到这里，采集结束、恢复代理后自动删除。
+
+如果这个文件一直存在，说明上次采集被中断了。下次启动服务或运行 `stop_local.ps1` 时：
+
+- 系统代理仍指向抓包端口：自动恢复原代理
+- 系统代理已被你手动改过：不覆盖你的设置，直接丢弃快照
 
 ### `logs/wechat_openid_collector.log`
 

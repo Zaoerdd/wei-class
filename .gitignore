@@ -45,6 +45,7 @@ logs/mitmproxy.pid
 logs/requirements.sha256
 logs/latest_openid.json
 logs/mitm_openid_result.txt
+logs/proxy_snapshot.*
 logs/*.png
 logs/cv_template_cache/
 @AutomationLog.txt
