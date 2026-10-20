@@ -803,3 +803,4 @@ a {
         min-height: 46px;
     }
 }
+button:disabled { opacity: .55; cursor: not-allowed; }

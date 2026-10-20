@@ -3,12 +3,22 @@ const state = {
     qrInstance: null,
     isFetching: false,
     lastStatus: null,
+    controlBusy: false,
 };
 
 const mojibakePattern = /[�锛鎴姝鏈褰娌鑾彇鍒閿辫缃粶璇]/;
 
 function $(id) {
     return document.getElementById(id);
+}
+
+function qrAutoLabel(meta) {
+    return ({queued: "等待自动打开", sending: "正在自动打开", confirming: "确认签到中",
+        manual: "需要手动处理", cancelled: "自动处理已停止"})[meta.qr_auto_state] || "";
+}
+
+function escapeHtml(value) {
+    return String(value || "").replace(/[&<>"']/g, char => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"})[char]);
 }
 
 function looksLikeMojibake(text) {
@@ -74,7 +84,7 @@ function collectorLabel(method) {
         return "微信界面自动识别";
     }
     if (method === "cv") {
-        return "CV + 代理抓取";
+        return "微信图像识别";
     }
     return method || "未知";
 }
@@ -109,6 +119,11 @@ function getUiTone(status) {
     const openidStatus = status.openid_status || {};
     const resultMeta = status.result_meta || {};
 
+    if (openidStatus.listening_enabled === false) {
+        return {tone: "idle", pill: "已暂停", title: "签到监听已暂停",
+            description: openidStatus.is_refreshing ? "正在重新获取 OpenID，完成后仍保持暂停。" : "点击开始监听后继续；暂停期间不会自动获取登录信息或处理新签到。"};
+    }
+
     if (resultMeta.is_error) {
         return {
             tone: "danger",
@@ -130,9 +145,9 @@ function getUiTone(status) {
     if (resultMeta.qr_ready) {
         return {
             tone: "running",
-            pill: "等待扫码",
-            title: "二维码已准备好",
-            description: "请直接使用右侧二维码完成签到。",
+            pill: qrAutoLabel(resultMeta) || "等待扫码",
+            title: qrAutoLabel(resultMeta) || "二维码已准备好",
+            description: resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "请直接使用右侧二维码完成签到。",
         };
     }
 
@@ -159,7 +174,7 @@ function getUiTone(status) {
             tone: "success",
             pill: "监听中",
             title: "已进入自动监听",
-            description: "OpenID 已就绪，系统会继续等待新的签到任务。",
+            description: openidStatus.qr_auto_enabled ? "正在监听新任务；二维码自动打开已启用，仅发送到文件传输助手。" : "OpenID 已就绪，系统会继续等待新的签到任务。",
         };
     }
 
@@ -168,7 +183,9 @@ function getUiTone(status) {
             tone: "danger",
             pill: "自动获取失败",
             title: "自动获取 OpenID 未成功",
-            description: "你可以检查微信窗口状态，或者在下方直接手动输入 OpenID。",
+            description: openidStatus.refresh_failures && openidStatus.next_refresh_at
+                ? `系统将在 ${formatTime(openidStatus.next_refresh_at)} 自动重试。请保持微信登录；获取期间会自动切到微信并搜索微助教。`
+                : "你可以检查微信窗口状态，或者在下方直接手动输入 OpenID。",
         };
     }
 
@@ -191,10 +208,12 @@ function renderBanner(status) {
         message = safeText(resultMeta.frontend_message, "当前任务处理失败，请检查微信状态或重新刷新。");
         toneClass = "notice-banner--danger";
     } else if (openidStatus.last_error) {
-        message = "自动获取 OpenID 失败，建议检查微信窗口或使用页面下方的手动输入。";
+        message = openidStatus.listening_enabled === false
+            ? "获取 OpenID 未成功，监听仍保持暂停。检查微信后，可点击顶部重新获取按钮。"
+            : "获取 OpenID 未成功，系统会自动重试；也可以检查微信后点击顶部重新获取按钮。";
         toneClass = "notice-banner--warning";
-    } else if (resultMeta.qr_ready) {
-        message = "二维码已经准备好，直接在结果面板扫码即可。";
+    } else if (resultMeta.qr_ready && !resultMeta.sign_completed) {
+        message = resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "二维码已经准备好，直接在结果面板扫码即可。";
         toneClass = "notice-banner--warning";
     }
 
@@ -247,8 +266,8 @@ function renderOverview(status) {
         $("result-summary").textContent = "签到完成";
         $("result-note").textContent = safeText(resultMeta.frontend_message, "本次签到已经成功提交。");
     } else if (resultMeta.qr_ready) {
-        $("result-summary").textContent = "二维码已就绪";
-        $("result-note").textContent = "请在结果面板直接扫码完成签到。";
+        $("result-summary").textContent = qrAutoLabel(resultMeta) || "二维码已就绪";
+        $("result-note").textContent = resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "请在结果面板直接扫码完成签到。";
     } else if (resultMeta.is_error) {
         $("result-summary").textContent = "处理异常";
         $("result-note").textContent = safeText(resultMeta.frontend_message, "请刷新或重新获取 OpenID。");
@@ -270,9 +289,9 @@ function renderTimeline(status) {
         },
         {
             title: "进入监听",
-            description: openidStatus.openid ? "已进入自动监听状态。" : "需要先拿到有效 OpenID。",
-            done: Boolean(openidStatus.openid),
-            active: Boolean(openidStatus.openid && status.active_sign_count === 0),
+            description: status.is_running ? "已进入自动监听状态。" : "监听尚未启动。",
+            done: Boolean(status.is_running),
+            active: Boolean(status.is_running && status.active_sign_count === 0),
         },
         {
             title: "发现签到",
@@ -321,7 +340,7 @@ function buildSignMeta(item, resultMeta, isCurrent) {
     if (resultMeta?.sign_completed) {
         tags.push('<span class="tag tag--accent">已完成</span>');
     } else if (resultMeta?.qr_ready) {
-        tags.push('<span class="tag tag--warning">等待扫码</span>');
+        tags.push(`<span class="tag tag--warning">${qrAutoLabel(resultMeta) || "等待扫码"}</span>`);
     } else if (resultMeta?.is_error) {
         tags.push('<span class="tag tag--danger">处理异常</span>');
     } else {
@@ -343,7 +362,7 @@ function renderActiveSigns(status) {
         signsContainer.innerHTML = `
             <div class="empty-state">
                 <strong>当前没有签到任务</strong>
-                <p>系统会持续轮询签到状态，一旦检测到新任务会自动显示在这里。</p>
+                <p>${status.openid_status?.listening_enabled === false ? "监听已暂停，点击开始监听后检测新任务。" : "检测到新任务后会自动显示在这里。"}</p>
             </div>
         `;
         return;
@@ -419,7 +438,7 @@ function renderResult(status) {
     const title = resultMeta.sign_completed
         ? "签到已经完成"
         : resultMeta.qr_ready
-            ? "二维码已经生成"
+            ? (qrAutoLabel(resultMeta) || "二维码已经生成")
             : resultMeta.is_error
                 ? "任务处理出现异常"
                 : currentSign
@@ -429,7 +448,7 @@ function renderResult(status) {
     const description = resultMeta.sign_completed
         ? safeText(resultMeta.frontend_message, "本次签到已经处理完成。")
         : resultMeta.qr_ready
-            ? "请直接使用下面的二维码扫码签到，也可以复制链接在其他设备打开。"
+            ? (resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "请直接使用下面的二维码扫码签到，也可以复制链接在其他设备打开。")
             : resultMeta.is_error
                 ? safeText(resultMeta.frontend_message, "请刷新页面，必要时重新获取 OpenID。")
                 : currentSign
@@ -440,13 +459,13 @@ function renderResult(status) {
         <div class="result-card">
             <div>
                 <h3>${title}</h3>
-                <p>${description}</p>
+                <p>${escapeHtml(description)}</p>
             </div>
             <div class="qr-shell ${qrUrl ? "" : "hidden"}">
                 <div class="qr-frame">
                     <div id="qrcode"></div>
                 </div>
-                <div class="qr-link">${qrUrl || "-"}</div>
+                <div class="qr-link">${escapeHtml(qrUrl || "-")}</div>
                 <button class="btn btn-subtle" type="button" id="copy-qr-btn">复制二维码链接</button>
             </div>
             <div class="meta-grid">
@@ -483,7 +502,7 @@ function renderRuntime(status) {
         ["来源", sourceLabel(openidStatus.current_source)],
         ["获取方式", collectorLabel(openidStatus.collector_method)],
         ["上次刷新", formatTime(openidStatus.last_refresh_at)],
-        ["下次刷新", formatTime(openidStatus.next_refresh_at)],
+        ["下次自动刷新", openidStatus.listening_enabled === false ? "已暂停" : formatTime(openidStatus.next_refresh_at)],
         ["缓存回退", openidStatus.used_file_fallback ? "是" : "否"],
         ["当前链接", truncate(openidStatus.current_url || "", 72)],
         ["结果消息", safeText(resultMeta.frontend_message || status.message, "等待结果")],
@@ -496,7 +515,7 @@ function renderRuntime(status) {
     $("runtime-details").innerHTML = details.map(([label, value]) => `
         <div class="detail-row">
             <dt>${label}</dt>
-            <dd>${value || "-"}</dd>
+            <dd>${escapeHtml(value || "-")}</dd>
         </div>
     `).join("");
 }
@@ -538,7 +557,13 @@ function updateLogoutVisibility(status) {
 }
 
 function renderStatus(status) {
+    const refreshFinished = state.lastStatus?.openid_status?.is_refreshing && !status.openid_status?.is_refreshing;
     state.lastStatus = status;
+    if (refreshFinished) {
+        $("control-feedback").textContent = status.openid_status.last_error
+            ? "获取未成功，请查看下方运行信息中的错误原因。"
+            : (status.openid_status.listening_enabled ? "OpenID 已更新，监听继续。" : "OpenID 已更新，监听仍保持暂停。");
+    }
     renderBanner(status);
     renderHero(status);
     renderOverview(status);
@@ -548,6 +573,60 @@ function renderStatus(status) {
     renderRuntime(status);
     renderStudents(status);
     updateLogoutVisibility(status);
+    renderControls();
+}
+
+function renderControls() {
+    const status = state.lastStatus?.openid_status;
+    const toggle = $("listen-toggle-btn");
+    toggle.textContent = status?.listening_enabled ? "暂停监听" : "开始监听";
+    toggle.disabled = !status || state.controlBusy;
+    $("openid-refresh-btn").textContent = status?.is_refreshing ? "正在获取 OpenID…" : "重新获取 OpenID";
+    $("openid-refresh-btn").disabled = !status || state.controlBusy || status.is_refreshing;
+}
+
+async function runControl(path, body) {
+    if (state.controlBusy) return;
+    state.controlBusy = true;
+    renderControls();
+    const feedback = $("control-feedback");
+    feedback.textContent = "正在执行…";
+    try {
+        const response = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+        const payload = await response.json();
+        if (!response.ok || !payload.success) throw new Error(payload.message || "操作未完成");
+        feedback.textContent = payload.message;
+        await fetchStatus();
+    } catch (error) {
+        feedback.textContent = error.message || "无法连接服务，请稍后重试";
+    } finally {
+        state.controlBusy = false;
+        renderControls();
+    }
+}
+
+async function fetchHistory() {
+    const container = $("sign-history");
+    try {
+        const response = await fetch("/api/sign_history", {cache: "no-store"});
+        if (!response.ok) throw new Error("history unavailable");
+        const history = await response.json();
+        $("history-count").textContent = `${history.total} 条记录`;
+        container.innerHTML = history.records.length ? history.records.map(row => `
+            <article class="sign-card">
+                <div class="card-topline"><div>
+                    <h3 class="card-title">${escapeHtml(row.course_name || row.task_name || "未命名签到")}</h3>
+                    <p class="card-subtitle">${escapeHtml(row.task_name || "")} · ${escapeHtml(row.student_name || "本人")}</p>
+                </div><span class="tag tag--accent">签到成功</span></div>
+                <div class="meta-grid">
+                    <span class="meta-chip">确认时间：${escapeHtml(formatTime(row.confirmed_at))}</span>
+                    <span class="meta-chip">${escapeHtml(row.sign_type || "签到")}</span>
+                    ${row.sign_rank ? `<span class="meta-chip">第 ${escapeHtml(row.sign_rank)} 名</span>` : ""}
+                </div><p>${escapeHtml(row.message || "已确认成功")}</p>
+            </article>`).join("") : '<div class="empty-state"><strong>暂无成功记录</strong><p>从现在起，本工具确认成功的签到会自动保存在这里。</p></div>';
+    } catch (error) {
+        container.textContent = "成功记录暂时无法读取，下次刷新时会重试。";
+    }
 }
 
 async function fetchStatus(showLoadingFeedback = false) {
@@ -567,6 +646,7 @@ async function fetchStatus(showLoadingFeedback = false) {
         }
         const status = await response.json();
         renderStatus(status);
+        await fetchHistory();
         if (showLoadingFeedback) {
             showFeedback("");
         }
@@ -618,7 +698,7 @@ async function logoutCurrentSession() {
         if (!response.ok) {
             throw new Error("logout failed");
         }
-        showFeedback("已停止当前监听，系统会重新等待可用 OpenID。", "success");
+        showFeedback("已退出登录并暂停监听。点击开始监听后才会恢复。", "success");
         await fetchStatus();
     } catch (error) {
         showFeedback("停止监听失败，请稍后重试。", "error");
@@ -626,6 +706,8 @@ async function logoutCurrentSession() {
 }
 
 function bindEvents() {
+    $("listen-toggle-btn").addEventListener("click", () => runControl("/api/listening", {enabled: !state.lastStatus?.openid_status?.listening_enabled}));
+    $("openid-refresh-btn").addEventListener("click", () => runControl("/api/openid/refresh"));
     $("refresh-btn").addEventListener("click", () => fetchStatus(true));
     $("manual-form").addEventListener("submit", submitManualOpenId);
     $("logout-btn").addEventListener("click", logoutCurrentSession);

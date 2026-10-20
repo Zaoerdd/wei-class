@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import json
 import logging
 import os
@@ -8,11 +9,12 @@ import re
 import socket
 import time
 import winreg
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
 
 from wechat_openid_collector import CollectorConfig, OpenIdCollectorError, WeChatOpenIdCollector
 
@@ -31,6 +33,11 @@ OPENID_JSON_RE = re.compile(r'["\']openid["\']\s*:\s*["\']([^"\']+)["\']', re.IG
 OPENID_HEX_RE = re.compile(r"\b[a-fA-F0-9]{32}\b")
 
 user32 = ctypes.windll.user32
+# HWND includes pointer-sized pseudo-handles such as HWND_TOPMOST (-1).
+# ctypes' default c_int arguments can truncate those on 64-bit Windows.
+user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                              ctypes.c_int, ctypes.c_int, wintypes.UINT]
+user32.SetWindowPos.restype = wintypes.BOOL
 wininet = ctypes.windll.wininet
 try:
     shcore = ctypes.windll.shcore
@@ -154,6 +161,9 @@ class CVWeChatOpenIdCollector:
         self.capture_proxy_port = int(os.getenv("WECHAT_CV_PROXY_PORT", "8080"))
         self.capture_proxy_connect_timeout = float(os.getenv("WECHAT_CV_PROXY_CONNECT_TIMEOUT", "2.0"))
         self.auto_switch_system_proxy = self._read_bool_env("WECHAT_CV_AUTO_SWITCH_SYSTEM_PROXY", True)
+        self.openid_source = os.getenv("WECHAT_CV_OPENID_SOURCE", "mitmproxy").strip().lower()
+        if self.openid_source not in ("mitmproxy", "browser"):
+            raise ValueError("WECHAT_CV_OPENID_SOURCE must be mitmproxy or browser")
         self.mitm_result_path = Path(
             os.getenv("WECHAT_CV_MITM_RESULT_PATH", self.base_dir / "logs" / "mitm_openid_result.txt")
         )
@@ -181,22 +191,28 @@ class CVWeChatOpenIdCollector:
     def run_once(self) -> dict:
         self.logger.info("starting one cv collection run")
         self._ensure_dependencies()
-        with self.temporary_capture_proxy():
+        proxy_context = self.temporary_capture_proxy() if self.openid_source == "mitmproxy" else nullcontext()
+        with proxy_context:
             window = self.find_wechat_window()
+            existing_browser = self.find_browser_window()
+            if existing_browser is not None:
+                self.logger.info("browser window already open, closing it before starting a new collection run")
+                self._close_browser_window(existing_browser, window, require_menu=False)
             self.activate_window(window)
-            if self.find_template_location("menu_button", window.rect) is None:
-                existing_browser = self.find_browser_window()
-                if existing_browser is not None:
-                    self.logger.info("browser window already open, closing it before starting a new collection run")
-                    self.close_browser(window)
-                    self.activate_window(window)
 
             baseline = self._snapshot_file(self.mitm_result_path)
-            self.logger.info("waiting for mitmproxy capture file at %s", self.mitm_result_path)
+            self.logger.info("collecting openid using %s", self.openid_source)
 
+            search_route = False
             if self.find_template_location("menu_button", window.rect) is not None:
                 self.logger.info("menu button already visible, skipping session click")
+            elif window.class_name.startswith("Qt"):
+                from wechat_service_search import WeChatServiceSearch
+                self.logger.info("opening TeacherMate with global WeChat search")
+                WeChatServiceSearch(self).open(window)
+                search_route = True
             else:
+                self.assert_window_ready(window)
                 self.click_template("session", window.rect)
                 self.wait_for_template(
                     "menu_button",
@@ -205,21 +221,31 @@ class CVWeChatOpenIdCollector:
                     description="menu button after opening the 微助教 session",
                 )
 
-            self.click_template("menu_button", window.rect)
-            self.wait_for_template(
-                "menu_item",
-                window.rect,
-                timeout=self.menu_popup_timeout,
-                description="menu item popup after clicking the menu button",
-            )
-            self.click_template("menu_item", window.rect)
+            if not search_route:
+                self.assert_window_ready(window)
+                self.click_template("menu_button", window.rect)
+                self.wait_for_template(
+                    "menu_item", window.rect, timeout=self.menu_popup_timeout,
+                    description="menu item popup after clicking the menu button",
+                )
+                self.assert_window_ready(window)
+                self.click_template("menu_item", window.rect)
             time.sleep(self.browser_delay)
 
             try:
-                openid = self.wait_for_openid_from_mitm(baseline)
+                openid = (
+                    self.wait_for_openid_from_browser()
+                    if self.openid_source == "browser"
+                    else self.wait_for_openid_from_mitm(baseline)
+                )
             finally:
                 try:
-                    self.close_browser(window)
+                    if search_route:
+                        browser = self.find_browser_window()
+                        if browser:
+                            self._close_browser_window(browser, window, require_menu=False)
+                    else:
+                        self.close_browser(window)
                 except Exception as exc:
                     self.logger.warning("cv close button click failed: %s", exc)
 
@@ -230,9 +256,10 @@ class CVWeChatOpenIdCollector:
             "menu_path": [self.config.menu_button_prefix, self.config.menu_item_prefix],
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "method": self.method_name,
-            "capture_source": "mitmproxy",
-            "mitm_result_path": str(self.mitm_result_path),
-            "proxy_server": f"{self.capture_proxy_host}:{self.capture_proxy_port}",
+            "capture_source": self.openid_source,
+            "navigation_source": "search" if search_route else "session",
+            "mitm_result_path": str(self.mitm_result_path) if self.openid_source == "mitmproxy" else None,
+            "proxy_server": f"{self.capture_proxy_host}:{self.capture_proxy_port}" if self.openid_source == "mitmproxy" else None,
         }
         self.write_result(result)
         return result
@@ -266,7 +293,7 @@ class CVWeChatOpenIdCollector:
             self._mss = mss
 
     def find_wechat_window(self) -> WindowInfo:
-        candidates = self._list_wechat_windows()
+        candidates = [w for w in self._list_wechat_windows() if w.class_name in self.window_classes]
         if not candidates:
             raise OpenIdCollectorError(f'WeChat window not found for title containing "{self.window_title_contains}"')
 
@@ -294,7 +321,13 @@ class CVWeChatOpenIdCollector:
 
         @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
         def callback(hwnd, _lparam):
-            if not user32.IsWindowVisible(hwnd):
+            class_name = self._get_class_name(hwnd)
+            is_main = class_name in self.window_classes
+            # WeChat notifications share the main window's Qt class and title.
+            # They are tool windows; never restore/click them as the chat window.
+            if is_main and user32.GetWindowLongW(hwnd, -20) & 0x80:  # WS_EX_TOOLWINDOW
+                return True
+            if not user32.IsWindowVisible(hwnd) and not is_main:
                 return True
 
             title = self._get_window_text(hwnd)
@@ -302,10 +335,9 @@ class CVWeChatOpenIdCollector:
                 return True
 
             rect = self._get_window_rect(hwnd)
-            if rect.width < 200 or rect.height < 200:
+            if (rect.width < 200 or rect.height < 200) and not is_main:
                 return True
 
-            class_name = self._get_class_name(hwnd)
             candidates.append(
                 WindowInfo(
                     hwnd=int(hwnd),
@@ -320,11 +352,58 @@ class CVWeChatOpenIdCollector:
         return candidates
 
     def activate_window(self, window: WindowInfo) -> None:
-        user32.ShowWindow(window.hwnd, SW_RESTORE)
-        user32.SetWindowPos(window.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
-        user32.SetWindowPos(window.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
-        user32.SetForegroundWindow(window.hwnd)
-        time.sleep(0.4)
+        user32.ShowWindow(window.hwnd, SW_RESTORE if user32.IsIconic(window.hwnd) else 5)
+        was_topmost = bool(user32.GetWindowLongW(window.hwnd, -20) & 0x8)
+        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+        # Keep the window above occluding apps until activation has completed.
+        # Dropping TOPMOST immediately can put it behind the foreground app
+        # again when Windows denies a background thread's foreground request.
+        try:
+            raised = user32.SetWindowPos(window.hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+            self.logger.info("window activation: hwnd=%s raised=%s topmost=%s", window.hwnd,
+                             bool(raised), bool(user32.GetWindowLongW(window.hwnd, -20) & 0x8))
+            user32.SetForegroundWindow(window.hwnd)
+            time.sleep(.4)
+            window.rect = self._get_window_rect(window.hwnd)
+            if int(user32.GetForegroundWindow()) != window.hwnd and self._pyautogui is not None:
+                scale = self.window_dpi_scale(window)
+                x = window.rect.left + int(window.rect.width * .6)
+                y = window.rect.top + int(12 * scale)
+                user32.WindowFromPoint.argtypes = [wintypes.POINT]
+                user32.WindowFromPoint.restype = wintypes.HWND
+                user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+                user32.GetAncestor.restype = wintypes.HWND
+                hit = user32.WindowFromPoint(wintypes.POINT(x, y))
+                owner = user32.GetAncestor(hit, 2) if hit else 0
+                self.logger.info("activation fallback: target=%s foreground=%s hit_owner=%s rect=%s",
+                                 window.hwnd, user32.GetForegroundWindow(), owner, window.rect)
+                if owner == window.hwnd and window.rect.width >= 200 and window.rect.height >= 200:
+                    self._pyautogui.click(x, y)
+                    time.sleep(.3)
+        finally:
+            if not was_topmost:
+                user32.SetWindowPos(window.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags | 0x10)  # SWP_NOACTIVATE
+        # Restoring a minimized window can finish its animation after activation.
+        # Stabilize here, before any search/menu coordinates have been chosen.
+        for _ in range(12):
+            rect = self._get_window_rect(window.hwnd)
+            time.sleep(.15)
+            if rect == self._get_window_rect(window.hwnd) and rect.width >= 200 and rect.height >= 200:
+                window.rect = rect
+                break
+        self.assert_window_ready(window)
+
+    def assert_window_ready(self, window: WindowInfo) -> None:
+        if int(user32.GetForegroundWindow()) != window.hwnd:
+            raise OpenIdCollectorError("微信窗口失去焦点，已停止操作；自动获取期间请避免切换窗口")
+        rect = self._get_window_rect(window.hwnd)
+        if rect != window.rect or rect.width < 200 or rect.height < 200:
+            self.logger.info("window geometry changed: expected=%s actual=%s", window.rect, rect)
+            raise OpenIdCollectorError("微信窗口位置或尺寸已变化，已停止使用旧坐标；请重新获取")
+
+    @staticmethod
+    def window_dpi_scale(window: WindowInfo) -> float:
+        return max(1.0, float(user32.GetDpiForWindow(window.hwnd)) / 96.0)
 
     def click_template(self, role: str, window_rect: Optional[WindowRect]) -> None:
         location = self.find_template_location(role, window_rect)
@@ -430,16 +509,17 @@ class CVWeChatOpenIdCollector:
 
         raise OpenIdCollectorError("menu button did not reappear after keyboard fallback")
 
-    def _close_browser_window(self, browser_window: WindowInfo, return_window: WindowInfo) -> None:
+    def _close_browser_window(self, browser_window: WindowInfo, return_window: WindowInfo, require_menu: bool = True) -> None:
         user32.PostMessageW(browser_window.hwnd, WM_CLOSE, 0, 0)
         deadline = time.monotonic() + max(1.5, self.click_delay * 2)
         while time.monotonic() < deadline:
             time.sleep(self.close_poll_interval)
             self.activate_window(return_window)
-            if self.find_template_location("menu_button", return_window.rect) is not None:
+            if ((not require_menu and not user32.IsWindowVisible(browser_window.hwnd))
+                    or (require_menu and self.find_template_location("menu_button", return_window.rect) is not None)):
                 self.logger.info("browser closed using WM_CLOSE")
                 return
-        raise OpenIdCollectorError("menu button did not reappear after WM_CLOSE")
+        raise OpenIdCollectorError("browser did not close" if not require_menu else "menu button did not reappear after WM_CLOSE")
 
     @contextmanager
     def temporary_capture_proxy(self):
@@ -629,6 +709,27 @@ class CVWeChatOpenIdCollector:
         detail = f" last parse error: {last_parse_error}" if last_parse_error else ""
         raise OpenIdCollectorError(
             f"timed out waiting for mitmproxy openid capture from {self.mitm_result_path}.{detail}"
+        )
+
+    def wait_for_openid_from_browser(self) -> str:
+        """Read only the TeacherMate document URL; never act on authorization UI."""
+        import uiautomation as auto
+
+        deadline = time.monotonic() + self.capture_timeout
+        reader = WeChatOpenIdCollector(self.config, self.logger)
+        with auto.UIAutomationInitializerInThread():
+            while time.monotonic() < deadline:
+                pane = reader.find_browser_pane()
+                url = reader.try_get_browser_url(pane) if pane else None
+                if url:
+                    parsed = urlparse(url)
+                    values = parse_qs(parsed.query).get("openid", [])
+                    if parsed.scheme == "https" and parsed.hostname == "v18.teachermate.cn" and values:
+                        self.logger.info("openid read from TeacherMate browser document")
+                        return values[0]
+                time.sleep(self.poll_interval)
+        raise OpenIdCollectorError(
+            "timed out reading TeacherMate browser URL; complete WeChat authorization and retry"
         )
 
     def _extract_latest_openid(self, path: Path) -> str:

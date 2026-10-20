@@ -29,6 +29,8 @@ from wechat_openid_collector import (
     build_logger as build_collector_logger,
 )
 from wechat_openid_strategy import build_openid_collector, normalize_openid_method
+from wechat_qr_sign import WECHAT_UI_LOCK, WeChatQrSigner, validate_qr_url
+from local_state import LocalState
 
 
 logging.basicConfig(
@@ -42,6 +44,7 @@ LOG_DIR = BASE_DIR / "logs"
 FAYE_LOG_PATH = LOG_DIR / "faye_history.log"
 OPENID_CACHE_PATH = BASE_DIR / "logs" / "latest_openid.json"
 LOCAL_CONFIG_PATH = BASE_DIR / "local_config.json"
+local_state = LocalState(BASE_DIR / "instance" / "attendance.sqlite3")
 OPENID_HEX_RE = re.compile(r"^[a-fA-F0-9]{32}$")
 OPENID_INVALID_MESSAGE_KEYWORDS = (
     "登录信息失效",
@@ -192,6 +195,17 @@ def safe_float(value: Any, fallback: float = 0.0) -> float:
         return fallback
 
 
+def collector_error_message(exc: Exception) -> str:
+    detail = str(exc)
+    if 'cv template "session"' in detail:
+        return "未识别到微助教服务号，请在微信中打开该会话，保持窗口可见后重新获取"
+    if 'cv template "menu_button"' in detail:
+        return "未识别到“学生”菜单，请打开微助教服务号并保持底部菜单可见后重新获取"
+    if 'cv template "menu_item"' in detail:
+        return "未识别到“全部”入口，请检查微信菜单后重新获取"
+    return detail
+
+
 def extract_response_message(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -340,6 +354,7 @@ def build_result_meta(
         "frontend_message": frontend_message,
         "sign_rank": sign_rank,
         "task_name": item.get("name") if item else None,
+        "course_name": item.get("courseName") if item else None,
         "course_id": item.get("courseId") if item else None,
         "sign_id": item.get("signId") if item else None,
         "sign_type": item.get("signType") if item else None,
@@ -493,6 +508,8 @@ class Pipeline:
         self.sign_results: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
         self.latest_result_meta: Optional[Dict[str, Any]] = None
         self.invalid_openid_refresh_requested = False
+        self.qr_auto_pending = set()
+        self.qr_auto_attempts = {}
 
     def start(self) -> None:
         if self.is_running:
@@ -594,7 +611,14 @@ class Pipeline:
 
     async def process_signatures(self, data: List[Dict[str, Any]]) -> None:
         for item in data:
+            if self.shutdown_event.is_set():
+                return
             sign_key = get_sign_key(item)
+            if local_state.has_success(self.openid, self.profile, *sign_key):
+                self._store_result_meta(sign_key, build_result_meta(
+                    item, "本机记录显示此签到已成功完成", sign_completed=True, result_ready=True,
+                    frontend_message="本机记录显示此签到已成功完成"))
+                continue
 
             if item.get("isQR"):
                 if any(ws.sign_id == item["signId"] and not ws.is_shutting_down for ws in self.websocket_clients):
@@ -647,6 +671,10 @@ class Pipeline:
     def _store_result_meta(self, sign_key: Tuple[Any, Any], result_meta: Dict[str, Any]) -> None:
         self.sign_results[sign_key] = clone_result_meta(result_meta)
         self.latest_result_meta = clone_result_meta(result_meta)
+        try:
+            local_state.record_success(self.openid, self.profile, result_meta)
+        except Exception:
+            logger.exception("签到成功记录保存失败")
 
     def _build_faye_snapshot(self, event: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -738,6 +766,8 @@ class Pipeline:
         result_meta["signed_students"] = signed_students
 
     async def run_websocket_client(self, item: Dict[str, Any]) -> None:
+        if self.shutdown_event.is_set():
+            return
         sign_id = item["signId"]
         course_id = item["courseId"]
         try:
@@ -758,6 +788,8 @@ class Pipeline:
     async def run_common_sign(self, item: Dict[str, Any]) -> None:
         sign_key = get_sign_key(item)
         try:
+            if self.shutdown_event.is_set():
+                return
             lat = safe_float(item.get("lat", item.get("latitude")), 0.0)
             lon = safe_float(item.get("lon", item.get("longitude")), 0.0)
             sign_result = submit_sign(
@@ -811,6 +843,16 @@ class Pipeline:
         )
         self._append_faye_event(result_meta, event)
         self._merge_signed_students(result_meta, event)
+        own_number = str((self.profile or {}).get("student_number") or "").strip()
+        own_sign_channels = {f"/attendance/{item['courseId']}/{item['signId']}", f"/sign/{item['signId']}"}
+        if own_number and event.get("event_kind") == "student_signed" and event.get("channel") in own_sign_channels and any(
+            str(student.get("student_number") or "").strip() == own_number
+            and student.get("is_out_of_bound") != 1
+            for student in extract_signed_students_from_event(event)
+        ):
+            result_meta.update(sign_completed=True, result_ready=True, is_error=False,
+                               qr_auto_state="completed", frontend_message="微助教签到记录确认：本人已签到",
+                               status_message="本人已签到")
         self._log_faye_event(item, event)
 
         if not result_meta.get("result_ready"):
@@ -827,20 +869,27 @@ class Pipeline:
             asyncio.run_coroutine_threadsafe(self._process_callback_result(item, url), self.loop)
 
     async def _process_callback_result(self, item: Dict[str, Any], url: str) -> None:
+        if self.shutdown_event.is_set():
+            return
         try:
             qr_url = str(url)
             sign_key, result_meta = self._ensure_result_meta(item, "获取成功")
+            if result_meta.get("sign_completed"):
+                return
             result_meta.update(
                 {
                     "qr_ready": True,
                     "result_ready": True,
-                    "frontend_message": "二维码已获取，请扫码签到",
+                    "frontend_message": result_meta.get("frontend_message") if result_meta.get("qr_auto_state") else "二维码已获取，请扫码签到",
                     "qr_url": qr_url,
                     "status_message": "获取成功",
                 }
             )
             self._store_result_meta(sign_key, result_meta)
             self.message = "获取成功"
+
+            if qr_auto_enabled:
+                self._schedule_qr_auto(item, qr_url)
 
             if pushplus_notifier.enabled:
                 notify_task = asyncio.create_task(
@@ -849,6 +898,58 @@ class Pipeline:
                 self._track_task(notify_task)
         except Exception as exc:
             self.message = f"解析二维码失败: {exc}"
+
+    def _schedule_qr_auto(self, item: Dict[str, Any], url: str) -> None:
+        key = get_sign_key(item)
+        if self.shutdown_event.is_set() or key in self.qr_auto_pending:
+            return
+        attempts = self.qr_auto_attempts.setdefault(key, {"urls": set(), "last_at": 0.0})
+        if url in attempts["urls"] or len(attempts["urls"]) >= 3 or time.monotonic() - attempts["last_at"] < 45:
+            return
+        if self.sign_results.get(key, {}).get("sign_completed"):
+            return
+        try:
+            validate_qr_url(url)
+        except ValueError as exc:
+            self._set_qr_auto_state(key, "manual", str(exc))
+            return
+        attempts["urls"].add(url)
+        attempts["last_at"] = time.monotonic()
+        self.qr_auto_pending.add(key)
+        self._set_qr_auto_state(key, "queued", "已收到二维码，等待自动在微信打开")
+        self._track_task(asyncio.create_task(self._run_qr_auto(item, url)))
+
+    def _set_qr_auto_state(self, key, state, message) -> None:
+        meta = self.sign_results.get(key)
+        if meta is None or meta.get("sign_completed"):
+            return
+        meta = clone_result_meta(meta)
+        meta.update(qr_auto_state=state, frontend_message=message, status_message=message)
+        if state == "completed":
+            meta.update(sign_completed=True, result_ready=True, is_error=False)
+        self._store_result_meta(key, meta)
+
+    async def _run_qr_auto(self, item: Dict[str, Any], url: str) -> None:
+        key = get_sign_key(item)
+
+        def cancelled():
+            return (self.shutdown_event.is_set() or self.sign_results.get(key, {}).get("sign_completed", False)
+                    or key not in {get_sign_key(active) for active in self.active_signs})
+
+        def progress(state, message):
+            if self.loop and not self.loop.is_closed():
+                self.loop.call_soon_threadsafe(self._set_qr_auto_state, key, state, message)
+
+        try:
+            if not hasattr(collector, "find_template_location"):
+                raise RuntimeError("自动打开二维码需要 CV 微信模式")
+            outcome = await asyncio.to_thread(WeChatQrSigner(collector).run, url, cancelled, progress)
+            self._set_qr_auto_state(key, outcome.state, outcome.message)
+        except Exception as exc:
+            logger.warning("二维码自动打开未完成: %s", type(exc).__name__)
+            self._set_qr_auto_state(key, "manual", f"自动处理已停止：{exc}；请手动扫码")
+        finally:
+            self.qr_auto_pending.discard(key)
 
     def _get_result_meta(self, current_sign: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if current_sign:
@@ -875,7 +976,9 @@ class Pipeline:
 
     def get_status(self) -> Dict[str, Any]:
         if not self.active_signs:
-            result_meta = build_result_meta(None, self.message or "暂无状态")
+            result_meta = (clone_result_meta(self.latest_result_meta)
+                           if self.latest_result_meta and self.latest_result_meta.get("qr_auto_state")
+                           else build_result_meta(None, self.message or "暂无状态"))
             return {
                 "success": 0,
                 "message": result_meta.get("status_message") or self.message,
@@ -986,6 +1089,9 @@ class OpenIdRefreshManager:
         self.last_error: Optional[str] = None
         self.is_refreshing = False
         self.used_file_fallback = False
+        self.refresh_failures = 0
+        self._next_refresh_deadline = time.monotonic()
+        self.listening_enabled = local_state.listening_enabled()
 
     def start(self) -> None:
         with self._state_lock:
@@ -993,18 +1099,20 @@ class OpenIdRefreshManager:
                 return
             self._started = True
 
-        self.refresh_openid(reason="startup", allow_file_fallback=True)
-        self._set_next_refresh_time()
+        if self.listening_enabled:
+            self.request_refresh_async(reason="startup", allow_file_fallback=True)
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="OpenIdRefresh")
         self._thread.start()
 
     def _run_loop(self) -> None:
-        while not self._stop_event.wait(self.interval_seconds):
-            self.refresh_openid(reason="scheduled", allow_file_fallback=False)
-            self._set_next_refresh_time()
+        while not self._stop_event.wait(1.0):
+            with self._state_lock:
+                due = self.listening_enabled and time.monotonic() >= self._next_refresh_deadline
+            if due:
+                self.refresh_openid(reason="scheduled", allow_file_fallback=False)
 
-    def refresh_openid(self, reason: str, allow_file_fallback: bool) -> bool:
-        if not self._refresh_lock.acquire(blocking=False):
+    def refresh_openid(self, reason: str, allow_file_fallback: bool, _reserved: bool = False) -> bool:
+        if not _reserved and not self._refresh_lock.acquire(blocking=False):
             logger.info("OpenID 刷新跳过：已有刷新任务正在执行")
             return False
 
@@ -1012,17 +1120,23 @@ class OpenIdRefreshManager:
             self.is_refreshing = True
 
         errors: List[str] = []
+        succeeded = False
         try:
+            if reason != "manual" and not self.listening_enabled:
+                return False
             record = None
             source = None
 
             try:
-                collected = self.collector.run_once()
+                with WECHAT_UI_LOCK:
+                    if reason != "manual" and not self.listening_enabled:
+                        return False
+                    collected = self.collector.run_once()
                 record = self._validate_record(collected)
                 source = "collector"
             except Exception as exc:
                 logger.exception("OpenID 采集失败 (%s): %s", reason, exc)
-                errors.append(f"OpenID 采集失败: {exc}")
+                errors.append(f"OpenID 采集失败: {collector_error_message(exc)}")
 
             if record is None and allow_file_fallback:
                 try:
@@ -1036,6 +1150,7 @@ class OpenIdRefreshManager:
 
             if record is not None and source is not None:
                 self._apply_record(record, source=source)
+                succeeded = True
                 return True
 
             with self._state_lock:
@@ -1045,22 +1160,41 @@ class OpenIdRefreshManager:
         finally:
             with self._state_lock:
                 self.is_refreshing = False
+                self.refresh_failures = 0 if succeeded else self.refresh_failures + 1
+                self._set_next_refresh_time()
             self._refresh_lock.release()
 
     def request_refresh_async(self, reason: str, allow_file_fallback: bool = False) -> bool:
+        if not self._refresh_lock.acquire(blocking=False):
+            return False
+        with self._state_lock:
+            self.is_refreshing = True
         def _runner() -> None:
-            try:
-                self.refresh_openid(reason=reason, allow_file_fallback=allow_file_fallback)
-            finally:
-                self._set_next_refresh_time()
+            self.refresh_openid(reason=reason, allow_file_fallback=allow_file_fallback, _reserved=True)
 
         refresh_thread = threading.Thread(
             target=_runner,
             daemon=True,
             name=f"OpenIdRefreshRequest-{int(time.time() * 1000)}",
         )
-        refresh_thread.start()
+        try:
+            refresh_thread.start()
+        except Exception:
+            self.is_refreshing = False
+            self._refresh_lock.release()
+            raise
         return True
+
+    def set_listening(self, enabled: bool) -> None:
+        with self._state_lock:
+            local_state.set_listening(enabled)
+            self.listening_enabled = enabled
+            if not enabled:
+                stop_all_pipelines()
+            elif self.current_openid:
+                activate_pipeline_for_openid(self.current_openid, self.current_profile)
+            else:
+                self.request_refresh_async(reason="resume", allow_file_fallback=True)
 
     def invalidate_openid(
         self,
@@ -1089,16 +1223,17 @@ class OpenIdRefreshManager:
         self.request_refresh_async(reason=refresh_reason, allow_file_fallback=allow_file_fallback)
         return True
 
-    def use_manual_openid(self, openid: str) -> Pipeline:
+    def use_manual_openid(self, openid: str) -> Optional[Pipeline]:
         record = self._validate_record({"openid": openid, "captured_at": datetime.now().astimezone().isoformat()})
         self._apply_record(record, source="manual")
+        with self._state_lock:
+            self.refresh_failures = 0
+            self._set_next_refresh_time()
         pipeline = self.get_current_pipeline()
-        if pipeline:
-            return pipeline
-        return activate_pipeline_for_openid(record["openid"], record.get("profile"))
+        return pipeline
 
     def clear_current_state(self, reason: Optional[str] = None) -> None:
-        stop_all_pipelines()
+        self.set_listening(False)
         with self._state_lock:
             self.current_openid = None
             self.current_profile = None
@@ -1106,6 +1241,8 @@ class OpenIdRefreshManager:
             self.current_url = None
             self.used_file_fallback = False
             self.last_error = reason or self.last_error
+            self.refresh_failures = 0
+            self._set_next_refresh_time()
 
     def get_current_pipeline(self) -> Optional[Pipeline]:
         with self._state_lock:
@@ -1122,16 +1259,22 @@ class OpenIdRefreshManager:
                 "current_url": self.current_url,
                 "last_refresh_at": self.last_refresh_at,
                 "next_refresh_at": self.next_refresh_at,
+                "listening_enabled": self.listening_enabled,
                 "last_error": self.last_error,
                 "is_refreshing": self.is_refreshing,
+                "refresh_failures": self.refresh_failures,
                 "used_file_fallback": self.used_file_fallback,
                 "profile": self.current_profile,
+                "qr_auto_enabled": qr_auto_enabled,
+                "wechat_ui_busy": WECHAT_UI_LOCK.locked(),
             }
 
     def build_waiting_message(self) -> str:
         state = self.get_public_state()
         if state["is_refreshing"]:
             return "正在自动获取 OpenID，请稍候..."
+        if not state["listening_enabled"]:
+            return "监听已暂停，点击开始监听后继续"
         if state["last_error"]:
             return state["last_error"]
         return "未登录"
@@ -1159,11 +1302,12 @@ class OpenIdRefreshManager:
         }
 
     def _apply_record(self, record: Dict[str, Any], source: str) -> None:
-        pipeline = activate_pipeline_for_openid(record["openid"], record.get("profile"))
-        profile = pipeline.profile or record.get("profile")
         refresh_time = datetime.now().astimezone().isoformat()
 
         with self._state_lock:
+            pipeline = (activate_pipeline_for_openid(record["openid"], record.get("profile"))
+                        if self.listening_enabled else None)
+            profile = (pipeline.profile if pipeline else None) or record.get("profile")
             self.current_openid = record["openid"]
             self.current_profile = profile
             self.current_source = source
@@ -1199,8 +1343,12 @@ class OpenIdRefreshManager:
         return json.loads(self.cache_path.read_text(encoding="utf-8"))
 
     def _set_next_refresh_time(self) -> None:
-        next_time = datetime.now().astimezone() + timedelta(seconds=self.interval_seconds)
         with self._state_lock:
+            delay = self.interval_seconds
+            if self.refresh_failures:
+                delay = min(self.interval_seconds, (30, 60, 120, 300)[min(self.refresh_failures - 1, 3)])
+            self._next_refresh_deadline = time.monotonic() + delay
+            next_time = datetime.now().astimezone() + timedelta(seconds=delay)
             self.next_refresh_at = next_time.isoformat()
 
 
@@ -1219,6 +1367,7 @@ pushplus_notifier = PushPlusNotifier(
     token=get_runtime_setting("PUSHPLUS_TOKEN", "pushplus", "token"),
     topic=get_runtime_setting("PUSHPLUS_TOPIC", "pushplus", "topic"),
 )
+qr_auto_enabled = str(get_runtime_setting("WECHAT_QR_AUTO_ENABLED", "qr_auto", "enabled", default="false")).lower() in ("true", "1", "yes")
 collector_method = normalize_openid_method(os.getenv("WECHAT_OPENID_METHOD", "uiautomation"))
 collector = None
 openid_refresh_manager = None
@@ -1297,8 +1446,8 @@ def login():
                 {
                     "success": True,
                     "message": "登录成功",
-                    "profile": pipeline.profile,
-                    "current_sign": pipeline.active_signs[0] if pipeline.active_signs else None,
+                    "profile": openid_refresh_manager.current_profile,
+                    "current_sign": pipeline.active_signs[0] if pipeline and pipeline.active_signs else None,
                     "openid_status": openid_refresh_manager.get_public_state(),
                 }
             )
@@ -1352,6 +1501,28 @@ def logout():
 def openid_status():
     ensure_runtime_initialized()
     return jsonify(openid_refresh_manager.get_public_state())
+
+
+@app.route("/api/listening", methods=["POST"])
+def set_listening():
+    ensure_runtime_initialized()
+    enabled = (request.get_json(silent=True) or {}).get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify(success=False, message="请选择开始或暂停监听"), 400
+    openid_refresh_manager.set_listening(enabled)
+    return jsonify(success=True, message="已开始监听，正在准备登录信息" if enabled else "已暂停监听；正在进行的请求可能仍会返回结果")
+
+
+@app.route("/api/openid/refresh", methods=["POST"])
+def refresh_openid_now():
+    ensure_runtime_initialized()
+    started = openid_refresh_manager.request_refresh_async(reason="manual", allow_file_fallback=False)
+    return jsonify(success=started, message="正在重新获取 OpenID，请保持微信可见" if started else "已有获取流程正在执行，请稍候"), (202 if started else 409)
+
+
+@app.route("/api/sign_history")
+def sign_history():
+    return jsonify(local_state.history())
 
 
 @app.route("/qr_code")

@@ -1,4 +1,7 @@
 {
+  "qr_auto": {
+    "enabled": false
+  },
   "pushplus": {
     "token": "",
     "topic": ""

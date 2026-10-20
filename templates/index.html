@@ -15,17 +15,19 @@
                 <p class="eyebrow">WEI CLASS ASSISTANT</p>
                 <h1>签到助手，双击就能用</h1>
                 <p class="hero-description">
-                    默认自动获取 OpenID 并持续监听签到任务。即使不熟悉命令行，也可以直接双击仓库里的
-                    <code>一键启动.bat</code> 打开服务。
+                    自由控制开始与暂停，随时重新获取登录信息。确认成功的签到会保存在本机，重启后仍可查看。
                 </p>
                 <div class="hero-actions">
-                    <button class="btn btn-primary" id="refresh-btn" type="button">立即刷新状态</button>
+                    <button class="btn btn-primary" id="listen-toggle-btn" type="button" disabled>正在连接…</button>
+                    <button class="btn btn-secondary" id="openid-refresh-btn" type="button" disabled>重新获取 OpenID</button>
+                    <button class="btn btn-subtle" id="refresh-btn" type="button">刷新状态</button>
                     <a class="btn btn-secondary" href="/usage">查看新手说明</a>
                 </div>
+                <p class="form-feedback" id="control-feedback" role="status" aria-live="polite"></p>
                 <div class="quick-steps">
                     <span>1. 双击 <code>一键启动.bat</code></span>
-                    <span>2. 保持微信和微助教窗口可见</span>
-                    <span>3. 页面会自动刷新并处理签到</span>
+                    <span>2. 保持微信登录，程序会自动寻找入口</span>
+                    <span>3. 点击开始监听，随时可以暂停</span>
                 </div>
             </div>
             <aside class="hero-panel">
@@ -132,7 +134,7 @@
                     </p>
                     <div class="form-actions">
                         <button class="btn btn-primary" id="manual-submit" type="submit">手动启用这个 OpenID</button>
-                        <button class="btn btn-secondary hidden" id="logout-btn" type="button">停止当前自动监听</button>
+                        <button class="btn btn-secondary hidden" id="logout-btn" type="button">退出登录并暂停</button>
                     </div>
                     <p class="form-feedback" id="manual-feedback" aria-live="polite"></p>
                 </form>
@@ -147,6 +149,18 @@
                 </div>
                 <dl class="detail-list" id="runtime-details"></dl>
             </article>
+        </section>
+
+        <section class="panel reveal" aria-labelledby="history-title">
+            <div class="panel-heading">
+                <div>
+                    <p class="panel-eyebrow">本机保存 · 最近 100 条</p>
+                    <h2 id="history-title">我的签到成功记录</h2>
+                </div>
+                <span class="panel-badge" id="history-count">0 条记录</span>
+            </div>
+            <p class="form-hint">仅保存本工具确认成功的签到，显示的是确认时间；未自动同步平台历史记录。</p>
+            <div class="card-stack" id="sign-history" aria-live="polite"></div>
         </section>
 
         <section class="panel reveal" aria-labelledby="signed-title">

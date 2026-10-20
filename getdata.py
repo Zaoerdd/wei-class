@@ -1,4 +1,5 @@
 import json
+import time
 
 import requests
 
@@ -23,8 +24,15 @@ def _build_headers(openid):
 
 
 def _get_json(url, openid):
-    response = requests.get(url, headers=_build_headers(openid), timeout=10)
-    return json.loads(response.text)
+    # Only retry reads. Sign-in POSTs are intentionally never retried here.
+    for attempt in range(3):
+        try:
+            response = requests.get(url, headers=_build_headers(openid), timeout=10)
+            return json.loads(response.text)
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt == 2:
+                raise
+            time.sleep(.5 * (attempt + 1))
 
 
 def _post_json(url, openid, payload):
