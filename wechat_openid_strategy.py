@@ -38,6 +38,18 @@ user32 = ctypes.windll.user32
 user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                               ctypes.c_int, ctypes.c_int, wintypes.UINT]
 user32.SetWindowPos.restype = wintypes.BOOL
+# Private kernel32 instance so these signatures do not leak into other modules.
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                ctypes.POINTER(wintypes.DWORD)]
+kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# Class name and title are not unique: Edge, VS Code and other Chromium apps
+# also use Chrome_WidgetWin_* and may show "微信" in a tab title.
+WECHAT_PROCESS_NAMES = frozenset({"weixin.exe", "wechat.exe", "wechatappex.exe", "wechatbrowser.exe"})
 wininet = ctypes.windll.wininet
 try:
     shcore = ctypes.windll.shcore
@@ -333,6 +345,8 @@ class CVWeChatOpenIdCollector:
             title = self._get_window_text(hwnd)
             if self.window_title_contains not in title:
                 return True
+            if self._get_process_name(hwnd).lower() not in WECHAT_PROCESS_NAMES:
+                return True
 
             rect = self._get_window_rect(hwnd)
             if (rect.width < 200 or rect.height < 200) and not is_main:
@@ -446,14 +460,19 @@ class CVWeChatOpenIdCollector:
         return None
 
     def close_browser(self, window: WindowInfo) -> None:
+        browser_window = self.find_browser_window()
+        if browser_window is None:
+            # Never fall back to the main window: a full-screen close-button
+            # match or WM_CLOSE there could hit WeChat itself or another app.
+            self.logger.info("no WeChat browser window found, nothing to close")
+            return
         deadline = time.monotonic() + self.close_timeout
         last_error: Optional[str] = None
-        browser_window = self.find_browser_window() or window
 
         while time.monotonic() < deadline:
             self.activate_window(browser_window)
             try:
-                location = self.find_template_location("close", None)
+                location = self.find_template_location("close", browser_window.rect)
                 if location is None:
                     raise OpenIdCollectorError("close template not visible yet")
                 self._click_location(location)
@@ -910,6 +929,21 @@ class CVWeChatOpenIdCollector:
         buffer = ctypes.create_unicode_buffer(256)
         user32.GetClassNameW(hwnd, buffer, 256)
         return buffer.value
+
+    def _get_process_name(self, hwnd: int) -> str:
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not handle:
+            return ""
+        try:
+            size = wintypes.DWORD(1024)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return ""
+            return os.path.basename(buffer.value)
+        finally:
+            kernel32.CloseHandle(handle)
 
     def _get_window_rect(self, hwnd: int) -> WindowRect:
         rect = ctypes.wintypes.RECT()

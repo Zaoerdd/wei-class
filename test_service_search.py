@@ -19,9 +19,37 @@ class ServiceSearchTests(unittest.TestCase):
         win32.EnumWindows.side_effect = lambda callback, _: (callback(1, 0), callback(2, 0))
         win32.GetWindowLongW.side_effect = lambda hwnd, _: 0x188 if hwnd == 1 else 0
         win32.IsWindowVisible.return_value = True
-        with patch.object(strategy, "user32", win32), patch.object(c, "_get_class_name", return_value="Qt51514QWindowIcon"), patch.object(c, "_get_window_text", return_value="微信"), patch.object(c, "_get_window_rect", return_value=strategy.WindowRect(-32000, -32000, -31840, -31972)):
+        with patch.object(strategy, "user32", win32), patch.object(c, "_get_class_name", return_value="Qt51514QWindowIcon"), patch.object(c, "_get_window_text", return_value="微信"), patch.object(c, "_get_process_name", return_value="Weixin.exe"), patch.object(c, "_get_window_rect", return_value=strategy.WindowRect(-32000, -32000, -31840, -31972)):
             windows = c._list_wechat_windows()
         self.assertEqual([w.hwnd for w in windows], [2])
+
+    def test_other_chromium_apps_with_wechat_title_are_excluded(self):
+        c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
+        win32 = Mock()
+        win32.EnumWindows.side_effect = lambda callback, _: (callback(1, 0), callback(2, 0), callback(3, 0))
+        win32.GetWindowLongW.return_value = 0
+        win32.IsWindowVisible.return_value = True
+        processes = {1: "msedge.exe", 2: "Code.exe", 3: "WeChatAppEx.exe"}
+        with patch.object(strategy, "user32", win32), patch.object(c, "_get_class_name", return_value="Chrome_WidgetWin_1"), patch.object(c, "_get_window_text", return_value="微信网页版"), patch.object(c, "_get_process_name", side_effect=lambda hwnd: processes[hwnd]), patch.object(c, "_get_window_rect", return_value=strategy.WindowRect(0, 0, 1000, 800)):
+            browser = c.find_browser_window()
+        self.assertEqual(browser.hwnd, 3)
+
+    def test_close_browser_never_targets_main_window_or_full_screen(self):
+        c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
+        main = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(0, 0, 1000, 800))
+        with patch.object(c, "find_browser_window", return_value=None), patch.object(c, "activate_window") as activate, patch.object(c, "find_template_location") as find, patch.object(strategy, "user32") as win32:
+            c.close_browser(main)
+        activate.assert_not_called()
+        find.assert_not_called()
+        win32.PostMessageW.assert_not_called()
+
+        browser = strategy.WindowInfo(2, "微信", "Chrome_WidgetWin_0", strategy.WindowRect(100, 50, 900, 700))
+        c._pyautogui = Mock()
+        located = SimpleNamespace(x=880, y=60)
+        with patch.object(c, "find_browser_window", return_value=browser), patch.object(c, "activate_window"), patch.object(c, "find_template_location", side_effect=[located, located]) as find, patch.object(strategy.time, "sleep"):
+            c.close_browser(main)
+        self.assertEqual(find.call_args_list[0].args, ("close", browser.rect))
+        c._pyautogui.click.assert_called_once_with(880, 60)
 
     def test_only_exact_wechat_search_page_is_accepted(self):
         self.assertTrue(is_service_search_url("weixin://resourceid/Search/app.html?query=微助教服务号", "微助教服务号"))
