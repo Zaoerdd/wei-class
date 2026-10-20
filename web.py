@@ -1154,15 +1154,12 @@ def get_pipeline(openid: Optional[str]) -> Optional[Pipeline]:
 
 
 class OpenIdRefreshManager:
-    def __init__(
-        self,
-        collector: Any,
-        cache_path: Path,
-        interval_hours: float = 2.0,
-    ):
+    # No periodic refresh: every collection issues a new OpenID and invalidates the
+    # previous one, so WeChat is only operated when the listener reports the current
+    # OpenID invalid, or to retry after a failed attempt left no OpenID at all.
+    def __init__(self, collector: Any, cache_path: Path):
         self.collector = collector
         self.cache_path = cache_path
-        self.interval_seconds = max(60.0, interval_hours * 3600.0)
         self._state_lock = threading.RLock()
         self._refresh_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -1179,7 +1176,8 @@ class OpenIdRefreshManager:
         self.is_refreshing = False
         self.used_file_fallback = False
         self.refresh_failures = 0
-        self._next_refresh_deadline = time.monotonic()
+        # Set only while a failed attempt left no usable OpenID (retry backoff).
+        self._next_refresh_deadline: Optional[float] = None
         self.listening_enabled = local_state.listening_enabled()
 
     def start(self) -> None:
@@ -1189,7 +1187,7 @@ class OpenIdRefreshManager:
             self._started = True
 
         if self.listening_enabled:
-            self.request_refresh_async(reason="startup", allow_file_fallback=True)
+            self.request_refresh_async(reason="startup", use_cache=True)
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="OpenIdRefresh")
         self._thread.start()
 
@@ -1197,16 +1195,17 @@ class OpenIdRefreshManager:
         ticks = 0
         while not self._stop_event.wait(1.0):
             with self._state_lock:
-                due = self.listening_enabled and time.monotonic() >= self._next_refresh_deadline
+                due = (self.listening_enabled and self._next_refresh_deadline is not None
+                       and time.monotonic() >= self._next_refresh_deadline)
             if due:
-                self.refresh_openid(reason="scheduled", allow_file_fallback=False)
+                self.refresh_openid(reason="retry", use_cache=True)
             ticks += 1
             if ticks % PIPELINE_WATCHDOG_TICKS == 0:
                 self._restart_dead_pipeline()
 
     def _restart_dead_pipeline(self) -> None:
-        # A listener thread that died unexpectedly would otherwise stay dead until
-        # the next OpenID refresh, which can be up to 2 hours away.
+        # A listener thread that died unexpectedly would otherwise stay dead: with no
+        # periodic refresh, only a live listener notices an invalid OpenID.
         with self._state_lock:
             if not self.listening_enabled or not self.current_openid:
                 return
@@ -1216,7 +1215,7 @@ class OpenIdRefreshManager:
             logger.warning("监听管道已停止，正在重新启动: %s", mask_openid(self.current_openid))
             activate_pipeline_for_openid(self.current_openid, self.current_profile)
 
-    def refresh_openid(self, reason: str, allow_file_fallback: bool, _reserved: bool = False) -> bool:
+    def refresh_openid(self, reason: str, use_cache: bool, _reserved: bool = False) -> bool:
         if not _reserved and not self._refresh_lock.acquire(blocking=False):
             logger.info("OpenID 刷新跳过：已有刷新任务正在执行")
             return False
@@ -1232,26 +1231,27 @@ class OpenIdRefreshManager:
             record = None
             source = None
 
-            try:
-                with WECHAT_UI_LOCK:
-                    if reason != "manual" and not self.listening_enabled:
-                        return False
-                    collected = self.collector.run_once()
-                record = self._validate_record(collected)
-                source = "collector"
-            except Exception as exc:
-                logger.exception("OpenID 采集失败 (%s): %s", reason, exc)
-                errors.append(f"OpenID 采集失败: {collector_error_message(exc)}")
-
-            if record is None and allow_file_fallback:
+            if use_cache:
+                # Check the cached OpenID first: collecting would issue a new one
+                # and invalidate it even if it still works.
                 try:
-                    cached = self._load_cached_record()
-                    record = self._validate_record(cached)
+                    record = self._validate_record(self._load_cached_record())
                     source = "file"
-                    logger.warning("启动采集未拿到新的 OpenID，已回退到缓存文件")
+                    logger.info("缓存的 OpenID 仍有效，未操作微信 (%s)", reason)
                 except Exception as exc:
-                    logger.exception("OpenID 缓存回退失败 (%s): %s", reason, exc)
-                    errors.append(f"缓存回退失败: {exc}")
+                    logger.info("缓存的 OpenID 不可用，改为从微信获取 (%s): %s", reason, exc)
+
+            if record is None:
+                try:
+                    with WECHAT_UI_LOCK:
+                        if reason != "manual" and not self.listening_enabled:
+                            return False
+                        collected = self.collector.run_once()
+                    record = self._validate_record(collected)
+                    source = "collector"
+                except Exception as exc:
+                    logger.exception("OpenID 采集失败 (%s): %s", reason, exc)
+                    errors.append(f"OpenID 采集失败: {collector_error_message(exc)}")
 
             if record is not None and source is not None:
                 self._apply_record(record, source=source)
@@ -1269,13 +1269,13 @@ class OpenIdRefreshManager:
                 self._set_next_refresh_time()
             self._refresh_lock.release()
 
-    def request_refresh_async(self, reason: str, allow_file_fallback: bool = False) -> bool:
+    def request_refresh_async(self, reason: str, use_cache: bool = False) -> bool:
         if not self._refresh_lock.acquire(blocking=False):
             return False
         with self._state_lock:
             self.is_refreshing = True
         def _runner() -> None:
-            self.refresh_openid(reason=reason, allow_file_fallback=allow_file_fallback, _reserved=True)
+            self.refresh_openid(reason=reason, use_cache=use_cache, _reserved=True)
 
         refresh_thread = threading.Thread(
             target=_runner,
@@ -1299,7 +1299,7 @@ class OpenIdRefreshManager:
             elif self.current_openid:
                 activate_pipeline_for_openid(self.current_openid, self.current_profile)
             else:
-                self.request_refresh_async(reason="resume", allow_file_fallback=True)
+                self.request_refresh_async(reason="resume", use_cache=True)
 
     def invalidate_openid(
         self,
@@ -1307,7 +1307,6 @@ class OpenIdRefreshManager:
         *,
         reason: Optional[str] = None,
         refresh_reason: str = "openid-invalid",
-        allow_file_fallback: bool = False,
     ) -> bool:
         sanitized_reason = (reason or "").strip()
         public_message = "检测到当前 OpenID 已失效，正在自动重新获取..."
@@ -1325,7 +1324,8 @@ class OpenIdRefreshManager:
 
         stop_pipeline(openid)
         logger.warning("已标记失效 OpenID，并开始自动刷新: %s", mask_openid(openid))
-        self.request_refresh_async(reason=refresh_reason, allow_file_fallback=allow_file_fallback)
+        # The cache holds the OpenID just reported invalid, so go straight to WeChat.
+        self.request_refresh_async(reason=refresh_reason, use_cache=False)
         return True
 
     def use_manual_openid(self, openid: str) -> Optional[Pipeline]:
@@ -1450,12 +1450,15 @@ class OpenIdRefreshManager:
 
     def _set_next_refresh_time(self) -> None:
         with self._state_lock:
-            delay = self.interval_seconds
-            if self.refresh_failures:
-                delay = min(self.interval_seconds, (30, 60, 120, 300)[min(self.refresh_failures - 1, 3)])
+            # Retry only when an attempt failed and no OpenID is left; with a usable
+            # OpenID the listener reports when it stops working.
+            if not self.refresh_failures or self.current_openid:
+                self._next_refresh_deadline = None
+                self.next_refresh_at = None
+                return
+            delay = (30, 60, 120, 300)[min(self.refresh_failures - 1, 3)]
             self._next_refresh_deadline = time.monotonic() + delay
-            next_time = datetime.now().astimezone() + timedelta(seconds=delay)
-            self.next_refresh_at = next_time.isoformat()
+            self.next_refresh_at = (datetime.now().astimezone() + timedelta(seconds=delay)).isoformat()
 
 
 collector_logger = build_collector_logger(COLLECTOR_LOG_PATH)
@@ -1492,7 +1495,6 @@ def configure_runtime(openid_method: Optional[str] = None) -> None:
     openid_refresh_manager = OpenIdRefreshManager(
         collector=collector,
         cache_path=OPENID_CACHE_PATH,
-        interval_hours=2.0,
     )
     runtime_initialized = False
 
@@ -1626,7 +1628,7 @@ def set_listening():
 @app.route("/api/openid/refresh", methods=["POST"])
 def refresh_openid_now():
     ensure_runtime_initialized()
-    started = openid_refresh_manager.request_refresh_async(reason="manual", allow_file_fallback=False)
+    started = openid_refresh_manager.request_refresh_async(reason="manual", use_cache=False)
     return jsonify(success=started, message="正在重新获取 OpenID，请保持微信可见" if started else "已有获取流程正在执行，请稍候"), (202 if started else 409)
 
 

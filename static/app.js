@@ -97,7 +97,7 @@ function sourceLabel(source) {
         return "手动输入";
     }
     if (source === "file") {
-        return "缓存回退";
+        return "本机缓存";
     }
     return "等待中";
 }
@@ -210,7 +210,9 @@ function renderBanner(status) {
     } else if (openidStatus.last_error) {
         message = openidStatus.listening_enabled === false
             ? "获取 OpenID 未成功，监听仍保持暂停。检查微信后，可点击顶部重新获取按钮。"
-            : "获取 OpenID 未成功，系统会自动重试；也可以检查微信后点击顶部重新获取按钮。";
+            : openidStatus.has_openid
+                ? "重新获取未成功，继续使用当前 OpenID；它失效时会自动重新获取。"
+                : "获取 OpenID 未成功，系统会自动重试；也可以检查微信后点击顶部重新获取按钮。";
         toneClass = "notice-banner--warning";
     } else if (resultMeta.qr_ready && !resultMeta.sign_completed) {
         message = resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "二维码已经准备好，直接在结果面板扫码即可。";
@@ -502,8 +504,10 @@ function renderRuntime(status) {
         ["来源", sourceLabel(openidStatus.current_source)],
         ["获取方式", collectorLabel(openidStatus.collector_method)],
         ["上次刷新", formatTime(openidStatus.last_refresh_at)],
-        ["下次自动刷新", openidStatus.listening_enabled === false ? "已暂停" : formatTime(openidStatus.next_refresh_at)],
-        ["缓存回退", openidStatus.used_file_fallback ? "是" : "否"],
+        ["自动获取", openidStatus.listening_enabled === false
+            ? "已暂停"
+            : openidStatus.next_refresh_at ? `${formatTime(openidStatus.next_refresh_at)} 重试` : "OpenID 失效时自动获取"],
+        ["使用缓存", openidStatus.used_file_fallback ? "是" : "否"],
         ["当前链接", truncate(openidStatus.current_url || "", 72)],
         ["结果消息", safeText(resultMeta.frontend_message || status.message, "等待结果")],
     ];

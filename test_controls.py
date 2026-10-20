@@ -1,4 +1,5 @@
 import asyncio
+import json
 import tempfile
 import threading
 import unittest
@@ -110,6 +111,45 @@ class ControlTests(unittest.TestCase):
         self.assertFalse(self.store.has_success("two", {"student_number": "2"}, 1, 2))
         self.store.record_success("two", {}, dict(meta, is_error=True))
         self.assertEqual(self.store.history()["total"], 1)
+
+    def test_startup_reuses_valid_cache_without_operating_wechat(self):
+        self.manager.listening_enabled = True
+        self.manager.cache_path.write_text(json.dumps({"openid": self.record["openid"]}), encoding="utf-8")
+        with patch.object(self.manager, "_validate_record", return_value=self.record):
+            self.assertTrue(self.manager.refresh_openid("startup", True))
+        self.collector.run_once.assert_not_called()
+        self.assertEqual(self.manager.current_source, "file")
+        self.assertIsNone(self.manager._next_refresh_deadline)
+
+    def test_missing_cache_falls_back_to_collecting(self):
+        self.manager.listening_enabled = True
+        self.collector.run_once.return_value = self.record
+        with patch.object(self.manager, "_validate_record", return_value=self.record):
+            self.assertTrue(self.manager.refresh_openid("startup", True))
+        self.collector.run_once.assert_called_once()
+        self.assertEqual(self.manager.current_source, "collector")
+        self.assertIsNone(self.manager.last_error)
+
+    def test_manual_refresh_always_collects_even_with_valid_cache(self):
+        self.manager.cache_path.write_text(json.dumps({"openid": self.record["openid"]}), encoding="utf-8")
+        self.collector.run_once.return_value = self.record
+        with patch.object(self.manager, "_validate_record", return_value=self.record):
+            self.assertTrue(self.manager.refresh_openid("manual", False))
+        self.collector.run_once.assert_called_once()
+
+    def test_failure_retries_only_when_no_openid_is_left(self):
+        self.manager.listening_enabled = True
+        self.collector.run_once.side_effect = RuntimeError("window unavailable")
+        self.manager.current_openid = self.record["openid"]
+        with patch.object(web.logger, "exception"):
+            self.assertFalse(self.manager.refresh_openid("manual", False))
+            # The current OpenID still works, so do not keep grabbing the WeChat window.
+            self.assertIsNone(self.manager._next_refresh_deadline)
+            self.assertIsNotNone(self.manager.last_error)
+            self.manager.current_openid = None
+            self.assertFalse(self.manager.refresh_openid("manual", False))
+        self.assertIsNotNone(self.manager._next_refresh_deadline)
+        self.assertIsNotNone(self.manager.next_refresh_at)
 
     def test_template_error_is_actionable_without_local_path(self):
         message = web.collector_error_message(RuntimeError('cv template "session" not found. template=D:\\secret\\session.png'))

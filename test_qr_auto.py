@@ -31,7 +31,9 @@ class RefreshRetryTests(unittest.TestCase):
                 self.assertFalse(self.manager.is_refreshing)
             self.assertTrue(self.manager.refresh_openid("test", False))
         self.assertEqual(self.manager.refresh_failures, 0)
-        self.assertEqual(self.manager._next_refresh_deadline, 7300)
+        # Success schedules nothing: the listener reports when the OpenID stops working.
+        self.assertIsNone(self.manager._next_refresh_deadline)
+        self.assertIsNone(self.manager.next_refresh_at)
 
     def test_parallel_request_does_not_postpone_retry(self):
         self.manager._next_refresh_deadline = 123
@@ -47,7 +49,7 @@ class RefreshRetryTests(unittest.TestCase):
         self.manager._next_refresh_deadline = 30
         with patch.object(self.manager._stop_event, "wait", side_effect=[False, False, True]), patch("web.time.monotonic", side_effect=[29, 30]), patch.object(self.manager, "refresh_openid") as refresh:
             self.manager._run_loop()
-        refresh.assert_called_once_with(reason="scheduled", allow_file_fallback=False)
+        refresh.assert_called_once_with(reason="retry", use_cache=True)
 
 
 class SessionOpeningTests(unittest.TestCase):
