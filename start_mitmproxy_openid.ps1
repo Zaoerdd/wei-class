@@ -55,7 +55,8 @@ $env:WECHAT_MITM_TARGET_DOMAIN = $TargetDomain
 $arguments = @(
     "-s", $AddonPath,
     "--listen-host", $ListenHost,
-    "-p", "$ListenPort"
+    "-p", "$ListenPort",
+    "--allow-hosts", ("^" + [regex]::Escape($TargetDomain) + "(:[0-9]+)?$")
 )
 
 if (-not [string]::IsNullOrWhiteSpace($selectedUpstream)) {

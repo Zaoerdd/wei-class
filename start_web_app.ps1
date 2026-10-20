@@ -97,7 +97,7 @@ function Get-RequirementsHash {
 function Test-DependenciesReady {
     param([string]$PythonPath)
 
-    & $PythonPath -c "import flask, requests, websockets, uiautomation, pyautogui, cv2"
+    & $PythonPath -c "import flask, requests, websockets, uiautomation, pyautogui, cv2, mss, PIL"
     return $LASTEXITCODE -eq 0
 }
 
@@ -149,7 +149,7 @@ function Start-ServerProcess {
         $argumentList += @("--openid-method", $OpenIdMethod)
     }
 
-    $process = Start-Process -FilePath $PythonPath -ArgumentList $argumentList -WorkingDirectory $RootDir -PassThru
+    $process = Start-Process -FilePath $PythonPath -ArgumentList $argumentList -WorkingDirectory $RootDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $LogDir "web.stdout.log") -RedirectStandardError (Join-Path $LogDir "web.stderr.log") -PassThru
     Set-Content -Path $PidPath -Value $process.Id -Encoding UTF8
     return $process
 }
@@ -169,7 +169,7 @@ Write-Step "Starting the local web service..."
 $serverProcess = Start-ServerProcess -PythonPath $venvPython
 
 $ready = $false
-for ($index = 0; $index -lt 40; $index++) {
+for ($index = 0; $index -lt 120; $index++) {
     Start-Sleep -Milliseconds 750
 
     $processAlive = Get-Process -Id $serverProcess.Id -ErrorAction SilentlyContinue
@@ -184,7 +184,7 @@ for ($index = 0; $index -lt 40; $index++) {
 }
 
 if (-not $ready) {
-    throw "The service failed to start. Check the server window output, then run stop_web_app.ps1 before trying again."
+    throw "The service failed to start. Check logs/web.stderr.log, then run stop_web_app.ps1 before trying again."
 }
 
 Write-Step "Service is ready. Opening the browser..."

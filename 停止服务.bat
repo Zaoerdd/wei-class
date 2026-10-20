@@ -1,5 +1,5 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-powershell -ExecutionPolicy Bypass -File "%~dp0stop_web_app.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop_local.ps1"
 pause
