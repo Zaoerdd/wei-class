@@ -50,6 +50,14 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 # Class name and title are not unique: Edge, VS Code and other Chromium apps
 # also use Chrome_WidgetWin_* and may show "微信" in a tab title.
 WECHAT_PROCESS_NAMES = frozenset({"weixin.exe", "wechat.exe", "wechatappex.exe", "wechatbrowser.exe"})
+
+
+def foreground_hwnd() -> int:
+    # Importing uiautomation switches user32's HWND return types to c_void_p, so
+    # "no foreground window" (e.g. while another app is opening) comes back as None.
+    return int(user32.GetForegroundWindow() or 0)
+
+
 wininet = ctypes.windll.wininet
 try:
     shcore = ctypes.windll.shcore
@@ -380,7 +388,7 @@ class CVWeChatOpenIdCollector:
             user32.SetForegroundWindow(window.hwnd)
             time.sleep(.4)
             window.rect = self._get_window_rect(window.hwnd)
-            if int(user32.GetForegroundWindow()) != window.hwnd and self._pyautogui is not None:
+            if foreground_hwnd() != window.hwnd and self._pyautogui is not None:
                 scale = self.window_dpi_scale(window)
                 x = window.rect.left + int(window.rect.width * .6)
                 y = window.rect.top + int(12 * scale)
@@ -409,7 +417,7 @@ class CVWeChatOpenIdCollector:
         self.assert_window_ready(window)
 
     def assert_window_ready(self, window: WindowInfo) -> None:
-        if int(user32.GetForegroundWindow()) != window.hwnd:
+        if foreground_hwnd() != window.hwnd:
             raise OpenIdCollectorError("微信窗口失去焦点，已停止操作；自动获取期间请避免切换窗口")
         rect = self._get_window_rect(window.hwnd)
         if rect != window.rect or rect.width < 200 or rect.height < 200:

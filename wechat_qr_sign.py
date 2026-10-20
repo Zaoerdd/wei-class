@@ -1,13 +1,14 @@
 """Open a received TeacherMate QR URL in the user's File Transfer Assistant."""
 from __future__ import annotations
 
-import ctypes
 import logging
 import re
 import threading
 import time
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
+
+from wechat_openid_strategy import foreground_hwnd
 
 WECHAT_UI_LOCK = threading.Lock()
 TRUSTED_DOMAINS = ("teachermate.cn", "teachermate.com.cn")
@@ -167,7 +168,7 @@ class WeChatQrSigner:
     def _assert_foreground(w, cancelled):
         if cancelled():
             raise RuntimeError("任务已取消，停止微信操作")
-        if int(ctypes.windll.user32.GetForegroundWindow()) != w.hwnd:
+        if foreground_hwnd() != w.hwnd:
             raise RuntimeError("微信窗口失去焦点，已停止操作，请手动扫码")
 
     def _assert_empty_draft(self, w):

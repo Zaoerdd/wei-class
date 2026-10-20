@@ -1,12 +1,14 @@
 import logging
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import cv2
 import numpy as np
 import wechat_openid_strategy as strategy
-from wechat_service_search import has_search_focus_border, is_service_search_url, select_all_entry
+from wechat_service_search import WeChatServiceSearch, has_search_focus_border, is_service_search_url, select_all_entry
 
 
 class ServiceSearchTests(unittest.TestCase):
@@ -80,6 +82,18 @@ class ServiceSearchTests(unittest.TestCase):
         cv2.rectangle(inactive, (20, 20), (240, 60), (150, 150, 150), 1)
         self.assertFalse(has_search_focus_border(inactive, 1.5, cv2))
 
+    def test_focus_timeout_saves_diagnostics_then_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capture = MagicMock()
+            capture.__enter__.return_value.grab.return_value = np.full((130, 420, 3), 240, dtype=np.uint8)
+            c = SimpleNamespace(window_dpi_scale=lambda w: 2.0, assert_window_ready=Mock(), base_dir=Path(tmp),
+                                _mss=SimpleNamespace(mss=lambda: capture), _numpy=np, _cv2=cv2, logger=Mock())
+            window = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(0, 0, 2880, 1704))
+            with self.assertRaisesRegex(strategy.OpenIdCollectorError, "搜索框未就绪"):
+                WeChatServiceSearch(c)._wait_focus(window, timeout=0)
+            self.assertTrue((Path(tmp) / "logs" / "search_focus_fail.png").exists())
+            self.assertIn("search box focus not detected", c.logger.warning.call_args.args[0])
+
     def test_main_window_selection_excludes_larger_browser(self):
         c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
         main = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(-32000, -32000, -31840, -31972))
@@ -124,6 +138,24 @@ class ServiceSearchTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "input failed"):
                 c.activate_window(window)
         self.assertEqual(win32.SetWindowPos.call_args.args[1], strategy.HWND_NOTOPMOST)
+
+    def test_no_foreground_window_is_reported_as_lost_focus_not_crash(self):
+        # uiautomation makes GetForegroundWindow return None when no window is in front.
+        c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
+        window = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(300, 200, 1300, 1000))
+        win32 = Mock()
+        win32.GetForegroundWindow.return_value = None
+        with patch.object(strategy, "user32", win32):
+            with self.assertRaisesRegex(strategy.OpenIdCollectorError, "失去焦点"):
+                c.assert_window_ready(window)
+        with patch.object(strategy, "user32", win32), patch.object(strategy.time, "sleep"), \
+                patch.object(c, "_get_window_rect", return_value=window.rect), patch.object(c, "window_dpi_scale", return_value=1.0):
+            win32.GetWindowLongW.return_value = 0
+            win32.WindowFromPoint.return_value = None
+            c._pyautogui = Mock()
+            with self.assertRaisesRegex(strategy.OpenIdCollectorError, "失去焦点"):
+                c.activate_window(window)
+        c._pyautogui.click.assert_not_called()
 
     def test_move_during_operation_rejects_stale_coordinates(self):
         c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))

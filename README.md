@@ -508,6 +508,10 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 - 系统代理仍指向抓包端口：自动恢复原代理
 - 系统代理已被你手动改过：不覆盖你的设置，直接丢弃快照
 
+### `logs/search_focus_fail.png`
+
+`cv` 模式通过微信全局搜索进入微助教时，如果按下 Ctrl+F 后 8 秒内仍没识别到搜索框获得焦点，会保存程序当时检测的那一小块截图（搜索框附近）。同时在 `logs/wechat_openid_collector.log` 里记录窗口位置、是否最大化、DPI 缩放和识别到的绿色边框尺寸。反馈“搜索框未就绪”问题时，请附上这张图和这条日志。
+
 ### `logs/wechat_openid_collector.log`
 
 `openid` 采集器日志，包括：
