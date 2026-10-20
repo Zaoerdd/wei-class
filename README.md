@@ -454,7 +454,13 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 - [http://127.0.0.1:5000/api/check_session](http://127.0.0.1:5000/api/check_session)
   查看当前自动会话状态
 - [http://127.0.0.1:5000/api/openid_status](http://127.0.0.1:5000/api/openid_status)
-  查看 `openid` 刷新状态
+  查看 `openid` 刷新状态。接口只返回 `has_openid` 和脱敏后的 `openid_masked`，不返回完整 `openid`；完整值只保存在本机 `logs/latest_openid.json`
+
+访问限制：
+
+- 只能通过 `localhost` 或 IP 地址（如 `127.0.0.1`）访问，用其他域名访问会返回 403，用于防止 DNS rebinding
+- 来自其他网页的 POST 请求（`Origin` 与当前地址不一致）会被拒绝，防止其他网站暂停监听或触发微信自动化
+- 服务本身没有登录认证，请保持默认的 `127.0.0.1` 绑定，不要用 `--host 0.0.0.0` 暴露到局域网
 - [http://127.0.0.1:5000/qr_code](http://127.0.0.1:5000/qr_code)
   获取当前二维码状态
 - [http://127.0.0.1:5000/usage](http://127.0.0.1:5000/usage)

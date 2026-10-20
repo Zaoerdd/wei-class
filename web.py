@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import html
+import ipaddress
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import urlsplit
 
 import requests
 from flask import Flask, jsonify, make_response, render_template, request
@@ -141,6 +143,12 @@ def mask_openid(openid: Optional[str]) -> Optional[str]:
     if len(openid) <= 10:
         return openid
     return f"{openid[:6]}***{openid[-4:]}"
+
+
+def mask_openid_in_url(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return url
+    return re.sub(r"([?&]openid=)([^&#]+)", lambda m: m.group(1) + (mask_openid(m.group(2)) or ""), url)
 
 
 def get_sign_type(item: Dict[str, Any]) -> str:
@@ -1250,13 +1258,14 @@ class OpenIdRefreshManager:
         return get_pipeline(openid)
 
     def get_public_state(self) -> Dict[str, Any]:
+        # Returned to the browser: never include the full OpenID.
         with self._state_lock:
             return {
-                "openid": self.current_openid,
+                "has_openid": bool(self.current_openid),
                 "openid_masked": mask_openid(self.current_openid),
                 "collector_method": getattr(self.collector, "method_name", "unknown"),
                 "current_source": self.current_source,
-                "current_url": self.current_url,
+                "current_url": mask_openid_in_url(self.current_url),
                 "last_refresh_at": self.last_refresh_at,
                 "next_refresh_at": self.next_refresh_at,
                 "listening_enabled": self.listening_enabled,
@@ -1452,7 +1461,6 @@ def login():
                 }
             )
         )
-        resp.set_cookie("user_openid", openid, max_age=7200)
         return resp
     except Exception as exc:
         logger.error("登录验证错误: %s", exc)
@@ -1465,11 +1473,11 @@ def check_session():
     state = openid_refresh_manager.get_public_state()
     pipeline = openid_refresh_manager.get_current_pipeline()
 
-    if state.get("openid") and pipeline:
+    if state.get("has_openid") and pipeline:
         return jsonify(
             {
                 "valid": True,
-                "openid": state["openid"],
+                "openid_masked": state["openid_masked"],
                 "profile": pipeline.profile,
                 "current_sign": pipeline.active_signs[0] if pipeline.active_signs else None,
                 "openid_status": state,
@@ -1493,6 +1501,7 @@ def logout():
     ensure_runtime_initialized()
     openid_refresh_manager.clear_current_state("已停止自动监听")
     resp = make_response(jsonify({"success": True}))
+    # Older versions stored the OpenID in this cookie; clear any leftover copy.
     resp.delete_cookie("user_openid")
     return resp
 
@@ -1535,6 +1544,24 @@ def qr_code_status():
     status = pipeline.get_status()
     status["openid_status"] = openid_refresh_manager.get_public_state()
     return jsonify(status)
+
+
+@app.before_request
+def reject_cross_site_requests():
+    # Only localhost or a raw IP may be used as Host; a domain name here means
+    # DNS rebinding, which would let another site read this local API.
+    hostname = urlsplit(f"//{request.host}").hostname or ""
+    if hostname != "localhost":
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            return jsonify(success=False, message="只允许通过 localhost 或 IP 地址访问本服务"), 403
+    # Block cross-site forms/fetches from other pages from changing state.
+    origin = request.headers.get("Origin")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and origin is not None:
+        if urlsplit(origin).netloc.lower() != request.host.lower():
+            return jsonify(success=False, message="拒绝来自其他网页的请求"), 403
+    return None
 
 
 @app.after_request

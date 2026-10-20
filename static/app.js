@@ -18,7 +18,7 @@ function qrAutoLabel(meta) {
 }
 
 function escapeHtml(value) {
-    return String(value || "").replace(/[&<>"']/g, char => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"})[char]);
+    return String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"})[char]);
 }
 
 function looksLikeMojibake(text) {
@@ -169,7 +169,7 @@ function getUiTone(status) {
         };
     }
 
-    if (openidStatus.openid) {
+    if (openidStatus.has_openid) {
         return {
             tone: "success",
             pill: "监听中",
@@ -247,7 +247,7 @@ function renderOverview(status) {
     const currentSign = status.current_sign || null;
 
     $("openid-summary").textContent = openidStatus.openid_masked || "等待自动获取";
-    $("openid-note").textContent = openidStatus.openid
+    $("openid-note").textContent = openidStatus.has_openid
         ? `最近更新时间：${formatTime(openidStatus.last_refresh_at)}`
         : "自动获取失败时，可以手动粘贴 OpenID 或完整链接。";
 
@@ -283,8 +283,8 @@ function renderTimeline(status) {
     const steps = [
         {
             title: "获取 OpenID",
-            description: openidStatus.openid ? "当前 OpenID 已经就绪。" : "系统正在自动获取或等待你手动输入。",
-            done: Boolean(openidStatus.openid),
+            description: openidStatus.has_openid ? "当前 OpenID 已经就绪。" : "系统正在自动获取或等待你手动输入。",
+            done: Boolean(openidStatus.has_openid),
             active: Boolean(openidStatus.is_refreshing),
         },
         {
@@ -324,8 +324,8 @@ function renderTimeline(status) {
         return `
             <article class="${classNames.join(" ")}">
                 <span class="timeline-index">${index + 1}</span>
-                <strong>${step.title}</strong>
-                <p>${step.description}</p>
+                <strong>${escapeHtml(step.title)}</strong>
+                <p>${escapeHtml(step.description)}</p>
             </article>
         `;
     }).join("");
@@ -376,16 +376,16 @@ function renderActiveSigns(status) {
             <article class="${cardClass}">
                 <div class="card-topline">
                     <div>
-                        <h3 class="card-title">${item.name || "未命名任务"}</h3>
-                        <p class="card-subtitle">${item.courseName || "未提供课程名"}${item.teacherName ? ` · ${item.teacherName}` : ""}</p>
+                        <h3 class="card-title">${escapeHtml(item.name || "未命名任务")}</h3>
+                        <p class="card-subtitle">${escapeHtml(item.courseName || "未提供课程名")}${item.teacherName ? ` · ${escapeHtml(item.teacherName)}` : ""}</p>
                     </div>
                     <div class="tag-row">${buildSignMeta(item, relatedMeta, isCurrent)}</div>
                 </div>
                 <div class="meta-grid">
-                    <span class="meta-chip">courseId: ${item.courseId ?? "-"}</span>
-                    <span class="meta-chip">signId: ${item.signId ?? "-"}</span>
-                    ${item.startTime ? `<span class="meta-chip">开始: ${item.startTime}</span>` : ""}
-                    ${item.endTime ? `<span class="meta-chip">结束: ${item.endTime}</span>` : ""}
+                    <span class="meta-chip">courseId: ${escapeHtml(item.courseId ?? "-")}</span>
+                    <span class="meta-chip">signId: ${escapeHtml(item.signId ?? "-")}</span>
+                    ${item.startTime ? `<span class="meta-chip">开始: ${escapeHtml(item.startTime)}</span>` : ""}
+                    ${item.endTime ? `<span class="meta-chip">结束: ${escapeHtml(item.endTime)}</span>` : ""}
                 </div>
             </article>
         `;
@@ -458,7 +458,7 @@ function renderResult(status) {
     resultPanel.innerHTML = `
         <div class="result-card">
             <div>
-                <h3>${title}</h3>
+                <h3>${escapeHtml(title)}</h3>
                 <p>${escapeHtml(description)}</p>
             </div>
             <div class="qr-shell ${qrUrl ? "" : "hidden"}">
@@ -470,8 +470,8 @@ function renderResult(status) {
             </div>
             <div class="meta-grid">
                 ${currentSign ? `<span class="meta-chip">${signTypeLabel(currentSign)}</span>` : ""}
-                ${resultMeta.sign_rank ? `<span class="meta-chip">签到名次: ${resultMeta.sign_rank}</span>` : ""}
-                ${resultMeta.task_name ? `<span class="meta-chip">任务: ${resultMeta.task_name}</span>` : ""}
+                ${resultMeta.sign_rank ? `<span class="meta-chip">签到名次: ${escapeHtml(resultMeta.sign_rank)}</span>` : ""}
+                ${resultMeta.task_name ? `<span class="meta-chip">任务: ${escapeHtml(resultMeta.task_name)}</span>` : ""}
             </div>
         </div>
     `;
@@ -514,7 +514,7 @@ function renderRuntime(status) {
 
     $("runtime-details").innerHTML = details.map(([label, value]) => `
         <div class="detail-row">
-            <dt>${label}</dt>
+            <dt>${escapeHtml(label)}</dt>
             <dd>${escapeHtml(value || "-")}</dd>
         </div>
     `).join("");
@@ -538,10 +538,10 @@ function renderStudents(status) {
     container.innerHTML = students.map((student, index) => `
         <article class="student-card">
             <div class="student-main">
-                <strong>${student.name || "未命名成员"}</strong>
-                <span>${student.student_number || "无学号"}${student.distance != null ? ` · ${student.distance}m` : ""}</span>
+                <strong>${escapeHtml(student.name || "未命名成员")}</strong>
+                <span>${escapeHtml(student.student_number || "无学号")}${student.distance != null ? ` · ${escapeHtml(student.distance)}m` : ""}</span>
             </div>
-            <div class="student-rank">${student.rank || index + 1}</div>
+            <div class="student-rank">${escapeHtml(student.rank || index + 1)}</div>
         </article>
     `).join("");
 }
@@ -549,7 +549,7 @@ function renderStudents(status) {
 function updateLogoutVisibility(status) {
     const logoutButton = $("logout-btn");
     const openidStatus = status.openid_status || {};
-    if (openidStatus.openid) {
+    if (openidStatus.has_openid) {
         logoutButton.classList.remove("hidden");
     } else {
         logoutButton.classList.add("hidden");

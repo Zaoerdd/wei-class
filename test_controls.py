@@ -116,6 +116,26 @@ class ControlTests(unittest.TestCase):
         self.assertIn("微助教服务号", message)
         self.assertNotIn("secret", message)
 
+    def test_public_state_never_exposes_full_openid(self):
+        openid = self.record["openid"]
+        self.manager.current_openid = openid
+        self.manager.current_url = f"https://v18.teachermate.cn/wechat-pro-ssr/?openid={openid}&from=wzj"
+        state = self.manager.get_public_state()
+        self.assertTrue(state["has_openid"])
+        self.assertNotIn(openid, str(state))
+        self.assertIn("from=wzj", state["current_url"])
+
+    def test_rebinding_hosts_and_cross_site_posts_are_rejected(self):
+        with patch.object(web, "openid_refresh_manager", self.manager), patch.object(web, "ensure_runtime_initialized"), patch.object(self.manager, "request_refresh_async", return_value=True) as refresh:
+            client = web.app.test_client()
+            self.assertEqual(client.get("/api/sign_history", base_url="http://evil.example:5000").status_code, 403)
+            self.assertEqual(client.get("/api/sign_history", base_url="http://127.0.0.1:5000").status_code, 200)
+            for origin in ("http://evil.example", "null", "http://localhost:6000"):
+                self.assertEqual(client.post("/api/openid/refresh", headers={"Origin": origin}).status_code, 403)
+            refresh.assert_not_called()
+            self.assertEqual(client.post("/api/openid/refresh", headers={"Origin": "http://localhost"}).status_code, 202)
+            self.assertEqual(client.post("/api/openid/refresh").status_code, 202)
+
 
 if __name__ == "__main__":
     unittest.main()
