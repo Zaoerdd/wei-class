@@ -48,6 +48,48 @@ def foreground_hwnd() -> int:
     return int(user32.GetForegroundWindow() or 0)
 
 
+# Private user32/gdi32 instances for PrintWindow, so these signatures stay local.
+_pw_user32 = ctypes.WinDLL("user32")
+_pw_gdi32 = ctypes.WinDLL("gdi32")
+_pw_user32.GetDC.argtypes = [wintypes.HWND]
+_pw_user32.GetDC.restype = wintypes.HDC
+_pw_user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+_pw_user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+_pw_user32.PrintWindow.restype = wintypes.BOOL
+_pw_gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+_pw_gdi32.CreateCompatibleDC.restype = wintypes.HDC
+_pw_gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+_pw_gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+_pw_gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+_pw_gdi32.SelectObject.restype = wintypes.HGDIOBJ
+_pw_gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+                                ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT]
+_pw_gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+_pw_gdi32.DeleteDC.argtypes = [wintypes.HDC]
+PAINT_DIFF_LIMIT = 10.0  # a working window measured 0.0; a stuck one 26.7-37.3
+
+
+def print_window(hwnd: int, width: int, height: int):
+    """The window's own rendering as a BGR numpy array, or None if PrintWindow fails."""
+    import numpy
+    screen = _pw_user32.GetDC(None)
+    mem = _pw_gdi32.CreateCompatibleDC(screen)
+    bitmap = _pw_gdi32.CreateCompatibleBitmap(screen, width, height)
+    old = _pw_gdi32.SelectObject(mem, bitmap)
+    try:
+        if not _pw_user32.PrintWindow(hwnd, mem, 2):  # PW_RENDERFULLCONTENT
+            return None
+        header = (ctypes.c_uint32 * 10)(40, width, ctypes.c_uint32(-height).value, 1 | (32 << 16), 0, 0, 0, 0, 0, 0)
+        buffer = (ctypes.c_ubyte * (width * height * 4))()
+        _pw_gdi32.GetDIBits(mem, bitmap, 0, height, buffer, header, 0)
+        return numpy.frombuffer(buffer, numpy.uint8).reshape(height, width, 4)[:, :, :3]
+    finally:
+        _pw_gdi32.SelectObject(mem, old)
+        _pw_gdi32.DeleteObject(bitmap)
+        _pw_gdi32.DeleteDC(mem)
+        _pw_user32.ReleaseDC(None, screen)
+
+
 wininet = ctypes.windll.wininet
 try:
     shcore = ctypes.windll.shcore
@@ -223,6 +265,7 @@ class CVWeChatOpenIdCollector:
                 self.logger.info("browser window already open, closing it before starting a new collection run")
                 self._close_browser_window(existing_browser, window, require_menu=False)
             self.activate_window(window)
+            window = self._ensure_window_painted(window)
 
             baseline = self._snapshot_file(self.mitm_result_path)
             self.logger.info("collecting openid using %s", self.openid_source)
@@ -320,6 +363,46 @@ class CVWeChatOpenIdCollector:
             time.sleep(1.0)  # let it finish its first paint before reading coordinates
             return window
         raise OpenIdCollectorError("微信已在运行，但无法从托盘打开主窗口，请手动打开微信后重新获取")
+
+    def window_paint_diff(self, window: WindowInfo) -> Optional[float]:
+        """Mean pixel difference between the screen and the window's own rendering.
+
+        Near 0 when the screen really shows the window. After a Remote Desktop session
+        moves to the console, WeChat can stop painting: it stays on top while the screen
+        still shows whatever was behind it (measured 27-37; 0.0 after recreating it)."""
+        r = window.rect
+        virtual = self._mss.mss().monitors[0]
+        left, top = max(r.left, virtual["left"]), max(r.top, virtual["top"])
+        right = min(r.right, virtual["left"] + virtual["width"])
+        bottom = min(r.bottom, virtual["top"] + virtual["height"])
+        if right - left < 50 or bottom - top < 50:
+            return None
+        own = print_window(window.hwnd, r.width, r.height)
+        if own is None:
+            return None
+        with self._mss.mss() as capture:
+            screen = self._numpy.array(capture.grab(
+                {"left": left, "top": top, "width": right - left, "height": bottom - top}))[:, :, :3]
+        own = own[top - r.top:bottom - r.top, left - r.left:right - r.left]
+        return float(self._numpy.abs(screen.astype("int16") - own.astype("int16")).mean())
+
+    def _ensure_window_painted(self, window: WindowInfo) -> WindowInfo:
+        diff = self.window_paint_diff(window)
+        if diff is None or diff < PAINT_DIFF_LIMIT:
+            return window
+        # Only rebuild on this measured evidence: one close-to-tray + reopen fixed it.
+        self.logger.warning("WeChat window is not painting (screen differs by %.1f), recreating it", diff)
+        user32.PostMessageW(window.hwnd, WM_CLOSE, 0, 0)
+        deadline = time.monotonic() + 5.0
+        while user32.IsWindow(window.hwnd) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        window = self._reopen_wechat_window()
+        self.activate_window(window)
+        diff = self.window_paint_diff(window)
+        if diff is not None and diff >= PAINT_DIFF_LIMIT:
+            raise OpenIdCollectorError("微信窗口没有正常显示（重新打开后仍未恢复），请手动打开一次微信后重新获取")
+        self.logger.info("WeChat window recreated and painting again")
+        return window
 
     def _close_to_tray(self) -> None:
         # WM_CLOSE is what the window's X button sends: WeChat goes back to the tray.

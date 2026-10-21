@@ -176,6 +176,24 @@ class ServiceSearchTests(unittest.TestCase):
                 patch.object(collector_module, "window_process_path", side_effect=lambda h: owners[h]):
             self.assertIs(reader.find_browser_pane(), wechat)
 
+    def test_window_is_recreated_only_when_it_is_not_painting(self):
+        c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
+        old = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(0, 0, 1000, 800))
+        new = strategy.WindowInfo(2, "微信", "Qt51514QWindowIcon", strategy.WindowRect(0, 0, 1000, 800))
+        with patch.object(c, "window_paint_diff", return_value=0.0), patch.object(c, "_reopen_wechat_window") as reopen:
+            self.assertIs(c._ensure_window_painted(old), old)
+        reopen.assert_not_called()
+        win32 = Mock()
+        win32.IsWindow.return_value = False
+        with patch.object(strategy, "user32", win32), patch.object(c, "window_paint_diff", side_effect=[30.0, 0.0]), \
+                patch.object(c, "_reopen_wechat_window", return_value=new), patch.object(c, "activate_window"):
+            self.assertIs(c._ensure_window_painted(old), new)
+        win32.PostMessageW.assert_called_once_with(1, strategy.WM_CLOSE, 0, 0)
+        with patch.object(strategy, "user32", win32), patch.object(c, "window_paint_diff", side_effect=[30.0, 30.0]), \
+                patch.object(c, "_reopen_wechat_window", return_value=new), patch.object(c, "activate_window"):
+            with self.assertRaisesRegex(strategy.OpenIdCollectorError, "没有正常显示"):
+                c._ensure_window_painted(old)  # rebuilt once only, then reported
+
     def test_main_window_selection_excludes_larger_browser(self):
         c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
         main = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(-32000, -32000, -31840, -31972))

@@ -123,15 +123,23 @@ class WeChatServiceSearch:
         c = self.c
         reader = WeChatOpenIdCollector(c.config, c.logger)
         deadline = time.monotonic() + max(15, c.config.browser_timeout_seconds)
+        seen = {"browser": None, "page": None, "buttons": 0, "services": 0, "entries": 0}
         while time.monotonic() < deadline:
             browser = c.find_browser_window()
             if browser is not None:
+                seen["browser"] = browser.title[:30]
                 pane = auto.ControlFromHandle(browser.hwnd)
                 url = reader.try_get_browser_url(pane)
+                parts = urlsplit(url or "")
+                seen["page"] = f"{parts.scheme}://{parts.netloc}{parts.path}" if url else None  # no query: it holds the search text
                 if is_service_search_url(url, c.config.session_name):
                     document = reader.find_browser_document(pane)
                     controls = [control for control, _ in auto.WalkControl(document, maxDepth=12)
                                 if reader.is_visible(control)]
+                    buttons = [x for x in controls if x.ControlTypeName == "ButtonControl"]
+                    seen["buttons"] = len(buttons)
+                    seen["services"] = sum(1 for x in buttons if (x.Name or "").strip().startswith(c.config.session_name))
+                    seen["entries"] = sum(1 for x in buttons if (x.Name or "").strip().startswith(c.config.menu_item_prefix))
                     entry = select_all_entry(controls, c.config.session_name, c.config.menu_item_prefix)
                     if entry is not None:
                         c.assert_window_ready(browser)
@@ -139,6 +147,9 @@ class WeChatServiceSearch:
                         c.logger.info("opened TeacherMate from verified WeChat search result")
                         return
             time.sleep(.3)
+        # Say what was last seen, so the next failure shows whether the page never
+        # loaded, the result was missing, or the UI tree was empty (e.g. not drawn).
+        c.logger.warning("search page entry not found: last seen %s", seen)
         raise OpenIdCollectorError("微信搜索页未出现微助教的“全部”入口；可能是网络未加载或微信页面已变化")
 
 
