@@ -162,6 +162,20 @@ class ServiceSearchTests(unittest.TestCase):
             win32.WindowFromPoint.return_value = None
             self.assertFalse(c.point_belongs_to(window, 5, 5))
 
+    def test_browser_url_reader_skips_other_apps_with_same_class(self):
+        from wechat_openid_collector import WeChatOpenIdCollector
+        import wechat_openid_collector as collector_module
+        rect = SimpleNamespace(width=lambda: 1200, height=lambda: 800)
+        pane = lambda hwnd: SimpleNamespace(ControlTypeName="PaneControl", ClassName="Chrome_WidgetWin_0",
+                                            BoundingRectangle=rect, NativeWindowHandle=hwnd)
+        clash, wechat = pane(1), pane(2)
+        owners = {1: r"C:\Program Files\Clash Verge\clash-verge.exe", 2: r"C:\Program Files\Tencent\Weixin\WeChatAppEx.exe"}
+        reader = WeChatOpenIdCollector(SimpleNamespace(), logging.getLogger("test"))
+        with patch.object(collector_module.auto, "GetRootControl"), \
+                patch.object(collector_module.auto, "WalkControl", return_value=[(clash, 1), (wechat, 1)]), \
+                patch.object(collector_module, "window_process_path", side_effect=lambda h: owners[h]):
+            self.assertIs(reader.find_browser_pane(), wechat)
+
     def test_main_window_selection_excludes_larger_browser(self):
         c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
         main = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(-32000, -32000, -31840, -31972))

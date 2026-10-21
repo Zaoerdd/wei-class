@@ -17,7 +17,8 @@ from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from wechat_openid_collector import CollectorConfig, OpenIdCollectorError, WeChatOpenIdCollector, write_json_atomic
+from wechat_openid_collector import (WECHAT_PROCESS_NAMES, CollectorConfig, OpenIdCollectorError,
+                                     WeChatOpenIdCollector, window_process_path, write_json_atomic)
 
 SUPPORTED_OPENID_METHODS = ("uiautomation", "cv")
 
@@ -39,18 +40,6 @@ user32 = ctypes.windll.user32
 user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                               ctypes.c_int, ctypes.c_int, wintypes.UINT]
 user32.SetWindowPos.restype = wintypes.BOOL
-# Private kernel32 instance so these signatures do not leak into other modules.
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-kernel32.OpenProcess.restype = wintypes.HANDLE
-kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
-                                                ctypes.POINTER(wintypes.DWORD)]
-kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
-kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-# Class name and title are not unique: Edge, VS Code and other Chromium apps
-# also use Chrome_WidgetWin_* and may show "微信" in a tab title.
-WECHAT_PROCESS_NAMES = frozenset({"weixin.exe", "wechat.exe", "wechatappex.exe", "wechatbrowser.exe"})
 
 
 def foreground_hwnd() -> int:
@@ -1043,19 +1032,7 @@ class CVWeChatOpenIdCollector:
         return os.path.basename(self._get_process_path(hwnd))
 
     def _get_process_path(self, hwnd: int) -> str:
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
-        if not handle:
-            return ""
-        try:
-            size = wintypes.DWORD(1024)
-            buffer = ctypes.create_unicode_buffer(size.value)
-            if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
-                return ""
-            return buffer.value
-        finally:
-            kernel32.CloseHandle(handle)
+        return window_process_path(hwnd)
 
     def _get_window_rect(self, hwnd: int) -> WindowRect:
         rect = ctypes.wintypes.RECT()

@@ -2,6 +2,14 @@
 
 ## 使用方式
 
+## 本次故障修复：BROWSER-PANE-01
+
+- 状态：`review`
+- 问题：2026-10-21 20:04 搜索框已经点到焦点，也打开了微助教页面，但读取网址时 45 秒超时。原因是 `find_browser_pane` 只按类名 `Chrome_WidgetWin_0` 找窗口，选中的是 Clash Verge 的窗口，一直在读它的网址。
+- 修改：读取网址时只认微信进程的窗口（`is_wechat_window`）。按进程查窗口的函数 `window_process_path` 和进程名单 `WECHAT_PROCESS_NAMES` 统一放到 `wechat_openid_collector.py`，`wechat_openid_strategy.py` 改为复用。
+- 验证：69 项测试通过，新增“同类名的其他程序会被跳过”一项。实测现在不会再选中 Clash Verge。修复前 20:10 的那次重试已经成功拿到 OpenID，监听已恢复。
+- 同时确认：FOCUS-02 的“直接点击搜索框”已在真实环境中生效（20:04、20:10 都记录了 `search box focused by clicking it`）。
+
 ## 本次故障修复：FOCUS-02
 
 - 状态：`review`

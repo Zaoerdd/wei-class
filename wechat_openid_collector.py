@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from ctypes import wintypes
 import json
 import logging
 import os
@@ -33,6 +34,38 @@ SWP_NOMOVE = 0x0002
 SWP_SHOWWINDOW = 0x0040
 
 user32 = ctypes.windll.user32
+
+
+# Class name and title are not unique: Edge, VS Code, Clash Verge and other Chromium
+# apps also use Chrome_WidgetWin_*, so WeChat windows are told apart by process.
+WECHAT_PROCESS_NAMES = frozenset({"weixin.exe", "wechat.exe", "wechatappex.exe", "wechatbrowser.exe"})
+
+# Private kernel32 instance so these signatures do not leak into other modules.
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_kernel32.OpenProcess.restype = wintypes.HANDLE
+_kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                 ctypes.POINTER(wintypes.DWORD)]
+_kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+_kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def window_process_path(hwnd: int) -> str:
+    """Full path of the executable that owns window `hwnd`, or "" if it cannot be read."""
+    pid = wintypes.DWORD()
+    ctypes.windll.user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+    handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not handle:
+        return ""
+    try:
+        size = wintypes.DWORD(1024)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not _kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return ""
+        return buffer.value
+    finally:
+        _kernel32.CloseHandle(handle)
 
 
 def write_json_atomic(path: Path, data: dict) -> None:
@@ -290,11 +323,17 @@ class WeChatOpenIdCollector:
                 continue
             if not self.is_visible(control):
                 continue
+            if not self.is_wechat_window(self.safe_get(lambda: control.NativeWindowHandle, 0)):
+                continue  # e.g. Clash Verge shares this class and was read instead of WeChat
 
             rect = self.safe_get(lambda: control.BoundingRectangle)
             if rect.width() > 500 and rect.height() > 300:
                 return control
         return None
+
+    @staticmethod
+    def is_wechat_window(hwnd) -> bool:
+        return bool(hwnd) and os.path.basename(window_process_path(int(hwnd))).lower() in WECHAT_PROCESS_NAMES
 
     def find_browser_document(self, browser_pane):
         for control, _ in auto.WalkControl(browser_pane, maxDepth=6):
