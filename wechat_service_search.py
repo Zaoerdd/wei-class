@@ -7,6 +7,11 @@ from urllib.parse import parse_qs, urlsplit
 from wechat_openid_collector import OpenIdCollectorError, WeChatOpenIdCollector
 
 
+# Center of WeChat 4.x's search field, in logical pixels from the main window's
+# top-left; it lies inside the region _field_focused checks for the focus border.
+SEARCH_FIELD_CENTER = (149, 41)
+
+
 def is_service_search_url(url, session_name):
     parsed = urlsplit(url or "")
     return (parsed.scheme == "weixin" and parsed.netloc == "resourceid"
@@ -39,15 +44,35 @@ class WeChatServiceSearch:
         _, pixels = self._grab_focus_region(window)
         return has_search_focus_border(pixels.astype("int16"), self.c.window_dpi_scale(window), self.c._cv2)
 
-    def _wait_focus(self, window, timeout=8):
+    def _wait_focus(self, window, timeout=8, diagnose=True):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self.c.assert_window_ready(window)
             if self._field_focused(window):
-                return
+                return True
             time.sleep(.25)
+        if not diagnose:
+            return False
         self._save_focus_diagnostics(window)
         raise OpenIdCollectorError("微信搜索框未就绪，已停止输入；请确认微信已登录且没有弹窗遮挡")
+
+    def _focus_search_field(self, window):
+        # Click the field itself first: when another app was in front and WeChat was
+        # activated by clicking its title bar, Ctrl+F alone was seen not to reach it.
+        c = self.c
+        scale = c.window_dpi_scale(window)
+        x = window.rect.left + int(SEARCH_FIELD_CENTER[0] * scale)
+        y = window.rect.top + int(SEARCH_FIELD_CENTER[1] * scale)
+        c.assert_window_ready(window)
+        if c.point_belongs_to(window, x, y):
+            c._pyautogui.click(x, y)
+            if self._wait_focus(window, timeout=2, diagnose=False):
+                c.logger.info("search box focused by clicking it")
+                return
+        c.logger.info("search box not focused by click, falling back to Ctrl+F")
+        c.assert_window_ready(window)
+        c._pyautogui.hotkey("ctrl", "f")
+        self._wait_focus(window)
 
     def _save_focus_diagnostics(self, window):
         # Keep what the detector saw, so a timeout shows whether the field never got
@@ -73,9 +98,7 @@ class WeChatServiceSearch:
         c.logger.info("search start: rect=%s maximized=%s scale=%.2f", window.rect,
                       bool(ctypes.windll.user32.IsZoomed(window.hwnd)), c.window_dpi_scale(window))
         with auto.UIAutomationInitializerInThread():
-            c.assert_window_ready(window)
-            c._pyautogui.hotkey("ctrl", "f")
-            self._wait_focus(window)
+            self._focus_search_field(window)
             # Only clear a verified search field, never a chat draft or clipboard.
             c.assert_window_ready(window)
             c._pyautogui.hotkey("ctrl", "a")

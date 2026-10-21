@@ -126,6 +126,42 @@ class ServiceSearchTests(unittest.TestCase):
             self.assertIs(c._reopen_wechat_window(), window)
         popen.assert_called_once_with([exe], close_fds=True)
 
+    def test_search_field_is_clicked_first_then_ctrl_f_as_fallback(self):
+        window = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(400, 200, 1400, 860))
+        c = SimpleNamespace(window_dpi_scale=lambda w: 2.0, assert_window_ready=Mock(), logger=Mock(),
+                            _pyautogui=Mock(), point_belongs_to=Mock(return_value=True))
+        search = WeChatServiceSearch(c)
+        with patch.object(search, "_field_focused", return_value=True), patch("wechat_service_search.time.sleep"):
+            search._focus_search_field(window)
+        c._pyautogui.click.assert_called_once_with(400 + 298, 200 + 82)
+        c._pyautogui.hotkey.assert_not_called()
+        # Click did not focus it: fall back to Ctrl+F.
+        c._pyautogui.reset_mock()
+        with patch.object(search, "_field_focused", side_effect=[False, True]), \
+                patch("wechat_service_search.time.sleep"), patch("wechat_service_search.time.monotonic", side_effect=range(100)):
+            search._focus_search_field(window)
+        c._pyautogui.hotkey.assert_called_once_with("ctrl", "f")
+        # Another window covers the field: never click through it.
+        c._pyautogui.reset_mock()
+        c.point_belongs_to.return_value = False
+        with patch.object(search, "_field_focused", return_value=True):
+            search._focus_search_field(window)
+        c._pyautogui.click.assert_not_called()
+        c._pyautogui.hotkey.assert_called_once_with("ctrl", "f")
+
+    def test_point_hit_test_requires_wechat_on_top(self):
+        c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
+        window = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(0, 0, 1000, 800))
+        win32 = Mock()
+        win32.WindowFromPoint.return_value = 10
+        win32.GetAncestor.return_value = 1
+        with patch.object(strategy, "user32", win32):
+            self.assertTrue(c.point_belongs_to(window, 5, 5))
+            win32.GetAncestor.return_value = 99  # e.g. Edge on top
+            self.assertFalse(c.point_belongs_to(window, 5, 5))
+            win32.WindowFromPoint.return_value = None
+            self.assertFalse(c.point_belongs_to(window, 5, 5))
+
     def test_main_window_selection_excludes_larger_browser(self):
         c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
         main = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(-32000, -32000, -31840, -31972))

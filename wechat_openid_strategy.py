@@ -468,6 +468,15 @@ class CVWeChatOpenIdCollector:
                 break
         self.assert_window_ready(window)
 
+    def point_belongs_to(self, window: WindowInfo, x: int, y: int) -> bool:
+        """True when the top-level window at screen point (x, y) is `window` (nothing covers it)."""
+        user32.WindowFromPoint.argtypes = [wintypes.POINT]
+        user32.WindowFromPoint.restype = wintypes.HWND
+        user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        user32.GetAncestor.restype = wintypes.HWND
+        hit = user32.WindowFromPoint(wintypes.POINT(x, y))
+        return bool(hit) and int(user32.GetAncestor(hit, 2) or 0) == window.hwnd  # GA_ROOT
+
     def assert_window_ready(self, window: WindowInfo) -> None:
         if foreground_hwnd() != window.hwnd:
             raise OpenIdCollectorError("微信窗口失去焦点，已停止操作；自动获取期间请避免切换窗口")
