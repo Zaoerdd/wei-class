@@ -1375,8 +1375,13 @@ class OpenIdRefreshManager:
                 "wechat_ui_busy": WECHAT_UI_LOCK.locked(),
             }
 
-    def build_waiting_message(self) -> str:
-        state = self.get_public_state()
+    def snapshot(self) -> Tuple[Dict[str, Any], Optional[Pipeline]]:
+        """The public OpenID state and the listener of that same OpenID, read together."""
+        with self._state_lock:
+            return self.get_public_state(), get_pipeline(self.current_openid)
+
+    def build_waiting_message(self, state: Optional[Dict[str, Any]] = None) -> str:
+        state = state or self.get_public_state()
         if state["is_refreshing"]:
             return "正在自动获取 OpenID，请稍候..."
         if not state["listening_enabled"]:
@@ -1516,21 +1521,27 @@ def ensure_runtime_initialized() -> None:
         runtime_initialized = True
 
 
-def build_empty_status(message: Optional[str] = None) -> Dict[str, Any]:
-    status_message = message or openid_refresh_manager.build_waiting_message()
-    result_meta = build_result_meta(None, status_message)
-    return {
-        "success": 0,
-        "message": status_message,
-        "qr_url": None,
-        "is_running": False,
-        "profile": openid_refresh_manager.get_public_state().get("profile"),
-        "active_sign_count": 0,
-        "active_signs": [],
-        "current_sign": None,
-        "result_meta": result_meta,
-        "openid_status": openid_refresh_manager.get_public_state(),
-    }
+def build_runtime_status() -> Dict[str, Any]:
+    """Single source for the page's status view (P0-01): one consistent snapshot of the
+    OpenID state and its listener, so the two can never describe different accounts."""
+    state, pipeline = openid_refresh_manager.snapshot()
+    if pipeline is None:
+        message = openid_refresh_manager.build_waiting_message(state)
+        status = {
+            "success": 0,
+            "message": message,
+            "qr_url": None,
+            "is_running": False,
+            "profile": state.get("profile"),
+            "active_sign_count": 0,
+            "active_signs": [],
+            "current_sign": None,
+            "result_meta": build_result_meta(None, message),
+        }
+    else:
+        status = pipeline.get_status()
+    status["openid_status"] = state
+    return status
 
 
 @app.route("/")
@@ -1569,8 +1580,7 @@ def login():
 @app.route("/api/check_session")
 def check_session():
     ensure_runtime_initialized()
-    state = openid_refresh_manager.get_public_state()
-    pipeline = openid_refresh_manager.get_current_pipeline()
+    state, pipeline = openid_refresh_manager.snapshot()
 
     if state.get("has_openid") and pipeline:
         return jsonify(
@@ -1584,7 +1594,7 @@ def check_session():
             }
         )
 
-    message = openid_refresh_manager.build_waiting_message()
+    message = openid_refresh_manager.build_waiting_message(state)
     return jsonify(
         {
             "valid": False,
@@ -1636,13 +1646,7 @@ def sign_history():
 @app.route("/qr_code")
 def qr_code_status():
     ensure_runtime_initialized()
-    pipeline = openid_refresh_manager.get_current_pipeline()
-    if not pipeline:
-        return jsonify(build_empty_status())
-
-    status = pipeline.get_status()
-    status["openid_status"] = openid_refresh_manager.get_public_state()
-    return jsonify(status)
+    return jsonify(build_runtime_status())
 
 
 @app.before_request

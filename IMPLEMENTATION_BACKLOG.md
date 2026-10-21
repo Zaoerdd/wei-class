@@ -183,7 +183,12 @@ P3-* -> P4-01
 
 ### P0-01 统一运行状态模型
 
-- 状态：`todo`
+- 状态：`review`
+- 2026-10-21 完成：
+  - 新增 `OpenIdRefreshManager.snapshot()`，在同一把锁内一次读出公开的 OpenID 状态和对应的监听管道。
+  - 新增 `build_runtime_status()`，作为页面状态的唯一来源。`/qr_code` 和 `/api/check_session` 都改为基于它的快照，`/api/openid_status` 继续返回 `get_public_state()`。
+  - 删除了重复的 `build_empty_status`，它以前会分两次读取状态。各接口返回的字段保持不变。
+  - 体检页（P0-02）和诊断包（P0-04）以后直接复用 `build_runtime_status()`。
 - 目标：把首页、健康检查、日志摘要、诊断导出需要的状态统一到一套结构中
 - 主要工作：
   - 盘点当前 `/api/openid_status`、`/api/check_session`、日志文件、mitm 状态来源

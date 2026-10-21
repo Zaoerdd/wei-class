@@ -151,6 +151,22 @@ class ControlTests(unittest.TestCase):
         self.assertIsNotNone(self.manager._next_refresh_deadline)
         self.assertIsNotNone(self.manager.next_refresh_at)
 
+    def test_runtime_status_reads_openid_and_listener_in_one_snapshot(self):
+        # P0-01: the page status, /qr_code and /api/check_session all come from snapshot().
+        with patch.object(web, "openid_refresh_manager", self.manager):
+            empty = web.build_runtime_status()
+            self.assertEqual(empty["active_sign_count"], 0)
+            self.assertFalse(empty["openid_status"]["has_openid"])
+            self.manager.current_openid = self.record["openid"]
+            pipeline = Mock()
+            pipeline.get_status.return_value = {"is_running": True, "active_sign_count": 1}
+            with patch.object(web, "get_pipeline", return_value=pipeline) as lookup:
+                status = web.build_runtime_status()
+            lookup.assert_called_once_with(self.record["openid"])
+            self.assertTrue(status["is_running"])
+            self.assertTrue(status["openid_status"]["has_openid"])
+            self.assertNotIn(self.record["openid"], str(status))
+
     def test_template_error_is_actionable_without_local_path(self):
         message = web.collector_error_message(RuntimeError('cv template "session" not found. template=D:\\secret\\session.png'))
         self.assertIn("微助教服务号", message)
