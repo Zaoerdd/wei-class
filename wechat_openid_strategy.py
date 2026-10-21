@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import socket
+import subprocess
 import time
 import winreg
 from contextlib import contextmanager, nullcontext
@@ -212,9 +213,22 @@ class CVWeChatOpenIdCollector:
     def run_once(self) -> dict:
         self.logger.info("starting one cv collection run")
         self._ensure_dependencies()
+        reopened = False
+        try:
+            window = self.find_wechat_window()
+        except OpenIdCollectorError:
+            # Closing WeChat to the tray destroys its main window; reopen it.
+            window = self._reopen_wechat_window()
+            reopened = True
+        try:
+            return self._run_once(window)
+        finally:
+            if reopened:
+                self._close_to_tray()
+
+    def _run_once(self, window: WindowInfo) -> dict:
         proxy_context = self.temporary_capture_proxy() if self.openid_source == "mitmproxy" else nullcontext()
         with proxy_context:
-            window = self.find_wechat_window()
             existing_browser = self.find_browser_window()
             if existing_browser is not None:
                 self.logger.info("browser window already open, closing it before starting a new collection run")
@@ -285,6 +299,48 @@ class CVWeChatOpenIdCollector:
         self.write_result(result)
         return result
 
+    def _wechat_exe_path(self) -> Optional[str]:
+        found: List[str] = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def callback(hwnd, _lparam):
+            path = self._get_process_path(hwnd)
+            if os.path.basename(path).lower() == "weixin.exe":
+                found.append(path)
+                return False
+            return True
+
+        user32.EnumWindows(callback, 0)
+        return found[0] if found else None
+
+    def _reopen_wechat_window(self, timeout: float = 10.0) -> WindowInfo:
+        # Running Weixin.exe again makes the existing instance show its main window;
+        # it does not start a second WeChat. Never launch it when WeChat is not running.
+        exe = self._wechat_exe_path()
+        if not exe:
+            raise OpenIdCollectorError("未找到微信窗口，请打开并登录电脑版微信")
+        self.logger.info("WeChat main window not found, reopening it from the tray")
+        subprocess.Popen([exe], close_fds=True)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            try:
+                window = self.find_wechat_window()
+            except OpenIdCollectorError:
+                continue
+            time.sleep(1.0)  # let it finish its first paint before reading coordinates
+            return window
+        raise OpenIdCollectorError("微信已在运行，但无法从托盘打开主窗口，请手动打开微信后重新获取")
+
+    def _close_to_tray(self) -> None:
+        # WM_CLOSE is what the window's X button sends: WeChat goes back to the tray.
+        try:
+            window = self.find_wechat_window()
+        except OpenIdCollectorError:
+            return
+        user32.PostMessageW(window.hwnd, WM_CLOSE, 0, 0)
+        self.logger.info("WeChat main window closed back to the tray")
+
     def write_result(self, result: dict) -> None:
         self.config.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.config.output_path.write_text(
@@ -316,7 +372,7 @@ class CVWeChatOpenIdCollector:
     def find_wechat_window(self) -> WindowInfo:
         candidates = [w for w in self._list_wechat_windows() if w.class_name in self.window_classes]
         if not candidates:
-            raise OpenIdCollectorError(f'WeChat window not found for title containing "{self.window_title_contains}"')
+            raise OpenIdCollectorError("未找到微信窗口，请打开并登录电脑版微信")
 
         def sort_key(item: WindowInfo) -> Tuple[int, int]:
             class_priority = 0 if item.class_name in self.window_classes else 1
@@ -979,6 +1035,9 @@ class CVWeChatOpenIdCollector:
         return buffer.value
 
     def _get_process_name(self, hwnd: int) -> str:
+        return os.path.basename(self._get_process_path(hwnd))
+
+    def _get_process_path(self, hwnd: int) -> str:
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
@@ -989,7 +1048,7 @@ class CVWeChatOpenIdCollector:
             buffer = ctypes.create_unicode_buffer(size.value)
             if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
                 return ""
-            return os.path.basename(buffer.value)
+            return buffer.value
         finally:
             kernel32.CloseHandle(handle)
 

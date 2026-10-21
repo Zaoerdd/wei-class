@@ -94,6 +94,38 @@ class ServiceSearchTests(unittest.TestCase):
             self.assertTrue((Path(tmp) / "logs" / "search_focus_fail.png").exists())
             self.assertIn("search box focus not detected", c.logger.warning.call_args.args[0])
 
+    def test_missing_main_window_reopens_from_tray_and_closes_back(self):
+        c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
+        window = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(0, 0, 1000, 800))
+        with patch.object(c, "_ensure_dependencies"), \
+                patch.object(c, "find_wechat_window", side_effect=strategy.OpenIdCollectorError("none")), \
+                patch.object(c, "_reopen_wechat_window", return_value=window) as reopen, \
+                patch.object(c, "_run_once", side_effect=RuntimeError("search failed")) as run, \
+                patch.object(c, "_close_to_tray") as close:
+            with self.assertRaises(RuntimeError):
+                c.run_once()
+        reopen.assert_called_once()
+        run.assert_called_once_with(window)
+        close.assert_called_once()  # back to the tray even when collection fails
+        with patch.object(c, "_ensure_dependencies"), patch.object(c, "find_wechat_window", return_value=window), \
+                patch.object(c, "_run_once", return_value={"openid": "x"}), patch.object(c, "_close_to_tray") as close:
+            self.assertEqual(c.run_once(), {"openid": "x"})
+        close.assert_not_called()  # a window that was already open stays open
+
+    def test_reopen_only_when_wechat_is_running(self):
+        c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
+        window = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(0, 0, 1000, 800))
+        with patch.object(c, "_wechat_exe_path", return_value=None), patch.object(strategy.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(strategy.OpenIdCollectorError, "请打开并登录"):
+                c._reopen_wechat_window()
+        popen.assert_not_called()
+        exe = r"C:\Program Files\Tencent\Weixin\Weixin.exe"
+        with patch.object(c, "_wechat_exe_path", return_value=exe), patch.object(strategy.subprocess, "Popen") as popen, \
+                patch.object(c, "find_wechat_window", side_effect=[strategy.OpenIdCollectorError("not yet"), window]), \
+                patch.object(strategy.time, "sleep"):
+            self.assertIs(c._reopen_wechat_window(), window)
+        popen.assert_called_once_with([exe], close_fds=True)
+
     def test_main_window_selection_excludes_larger_browser(self):
         c = strategy.CVWeChatOpenIdCollector(SimpleNamespace(browser_timeout_seconds=10), logging.getLogger("test"))
         main = strategy.WindowInfo(1, "微信", "Qt51514QWindowIcon", strategy.WindowRect(-32000, -32000, -31840, -31972))
