@@ -134,6 +134,19 @@ class PipelineReliabilityTests(unittest.TestCase):
         self.assertEqual(set(p.sign_results), {(1, 2)})
         self.assertEqual(p.qr_auto_attempts, {})
 
+    def test_faye_log_never_contains_full_openid(self):
+        with patch.object(web.faye_file_logger, "info") as log:
+            self.pipeline._log_faye_event({"name": "签到", "courseId": 1, "signId": 2}, {"event_kind": "meta_connect"})
+        self.assertNotIn("a" * 32, log.call_args.args[0])
+
+    def test_atomic_write_keeps_old_file_when_write_fails(self):
+        path = self.tmp / "latest_openid.json"
+        web.write_json_atomic(path, {"openid": "old"})
+        with patch("wechat_openid_collector.os.replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                web.write_json_atomic(path, {"openid": "new"})
+        self.assertEqual(web.json.loads(path.read_text(encoding="utf-8")), {"openid": "old"})
+
     def test_failed_faye_handshake_raises_clear_error_with_timeout(self):
         response = Mock(text='[{"successful": false, "error": "403::Forbidden"}]')
         with patch.object(ad.requests, "post", return_value=response) as post:

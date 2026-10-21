@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from wechat_openid_collector import CollectorConfig, OpenIdCollectorError, WeChatOpenIdCollector
+from wechat_openid_collector import CollectorConfig, OpenIdCollectorError, WeChatOpenIdCollector, write_json_atomic
 
 SUPPORTED_OPENID_METHODS = ("uiautomation", "cv")
 
@@ -342,11 +342,7 @@ class CVWeChatOpenIdCollector:
         self.logger.info("WeChat main window closed back to the tray")
 
     def write_result(self, result: dict) -> None:
-        self.config.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self.config.output_path.write_text(
-            json.dumps(result, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        write_json_atomic(self.config.output_path, result)
         self.logger.info("result written to %s", self.config.output_path)
 
     def _ensure_dependencies(self) -> None:

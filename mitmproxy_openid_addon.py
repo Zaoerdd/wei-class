@@ -93,7 +93,9 @@ class OpenIDInterceptor:
         with self.output_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-        print(f"[mitmproxy] captured openid from {source}: {openid}")
+        # stdout goes to logs/mitmproxy.stdout.log: never print the full OpenID there.
+        masked = f"{openid[:6]}***{openid[-4:]}" if len(openid) > 10 else "***"
+        print(f"[mitmproxy] captured openid from {source}: {masked}")
 
 
 addons = [OpenIDInterceptor()]

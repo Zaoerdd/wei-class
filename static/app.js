@@ -1,8 +1,16 @@
+const POLL_MS = 3000;
+const POLL_MAX_MS = 30000;
+const HISTORY_REFRESH_MS = 30000;
+
 const state = {
     pollHandle: null,
     qrInstance: null,
     isFetching: false,
     lastStatus: null,
+    lastStatusJson: "",
+    lastHistoryJson: "",
+    lastHistoryAt: 0,
+    pollFailures: 0,
     controlBusy: false,
 };
 
@@ -614,7 +622,11 @@ async function fetchHistory() {
     try {
         const response = await fetch("/api/sign_history", {cache: "no-store"});
         if (!response.ok) throw new Error("history unavailable");
-        const history = await response.json();
+        const text = await response.text();
+        state.lastHistoryAt = Date.now();
+        if (text === state.lastHistoryJson) return;
+        state.lastHistoryJson = text;
+        const history = JSON.parse(text);
         $("history-count").textContent = `${history.total} 条记录`;
         container.innerHTML = history.records.length ? history.records.map(row => `
             <article class="sign-card">
@@ -633,7 +645,7 @@ async function fetchHistory() {
     }
 }
 
-async function fetchStatus(showLoadingFeedback = false) {
+async function fetchStatus(showLoadingFeedback = false, force = false) {
     if (state.isFetching) {
         return;
     }
@@ -648,13 +660,26 @@ async function fetchStatus(showLoadingFeedback = false) {
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
         }
-        const status = await response.json();
-        renderStatus(status);
-        await fetchHistory();
+        const text = await response.text();
+        const status = JSON.parse(text);
+        // Redraw only on change: a full redraw every poll makes the QR code flicker,
+        // drops focus and keeps screen readers re-announcing the page.
+        const changed = force || text !== state.lastStatusJson;
+        const wasCompleted = Boolean(state.lastStatus?.result_meta?.sign_completed);
+        if (changed) {
+            state.lastStatusJson = text;
+            renderStatus(status);
+        }
+        const justCompleted = !wasCompleted && Boolean(status.result_meta?.sign_completed);
+        if (force || justCompleted || Date.now() - state.lastHistoryAt >= HISTORY_REFRESH_MS) {
+            await fetchHistory();
+        }
+        state.pollFailures = 0;
         if (showLoadingFeedback) {
             showFeedback("");
         }
     } catch (error) {
+        state.pollFailures = Math.min(state.pollFailures + 1, 4);
         showFeedback("无法连接本地服务，请确认已运行一键启动脚本。", "error");
     } finally {
         state.isFetching = false;
@@ -712,22 +737,32 @@ async function logoutCurrentSession() {
 function bindEvents() {
     $("listen-toggle-btn").addEventListener("click", () => runControl("/api/listening", {enabled: !state.lastStatus?.openid_status?.listening_enabled}));
     $("openid-refresh-btn").addEventListener("click", () => runControl("/api/openid/refresh"));
-    $("refresh-btn").addEventListener("click", () => fetchStatus(true));
+    $("refresh-btn").addEventListener("click", () => fetchStatus(true, true));
     $("manual-form").addEventListener("submit", submitManualOpenId);
     $("logout-btn").addEventListener("click", logoutCurrentSession);
 }
 
-function startPolling() {
-    if (state.pollHandle) {
-        clearInterval(state.pollHandle);
+function schedulePoll() {
+    clearTimeout(state.pollHandle);
+    if (document.hidden) {
+        return;  // resumes from visibilitychange
     }
-    state.pollHandle = window.setInterval(() => {
-        fetchStatus(false);
-    }, 3000);
+    // Back off while the local service is unreachable, up to POLL_MAX_MS.
+    const delay = Math.min(POLL_MAX_MS, POLL_MS * 2 ** state.pollFailures);
+    state.pollHandle = window.setTimeout(async () => {
+        await fetchStatus(false);
+        schedulePoll();
+    }, delay);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
     bindEvents();
-    fetchStatus(true);
-    startPolling();
+    fetchStatus(true).then(schedulePoll);
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+            clearTimeout(state.pollHandle);
+        } else {
+            fetchStatus(false).then(schedulePoll);
+        }
+    });
 });

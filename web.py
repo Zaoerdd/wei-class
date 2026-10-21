@@ -29,6 +29,7 @@ from wechat_openid_collector import (
     CollectorConfig,
     OpenIdCollectorError,
     build_logger as build_collector_logger,
+    write_json_atomic,
 )
 from wechat_openid_strategy import build_openid_collector, normalize_openid_method, recover_stale_capture_proxy
 from wechat_qr_sign import WECHAT_UI_LOCK, WeChatQrSigner, validate_qr_url
@@ -768,7 +769,6 @@ class Pipeline:
         try:
             payload = {
                 "timestamp": datetime.now(timezone.utc).astimezone().isoformat(),
-                "openid": self.openid,
                 "openid_masked": mask_openid(self.openid),
                 "task_name": item.get("name"),
                 "course_id": item.get("courseId"),
@@ -1437,11 +1437,7 @@ class OpenIdRefreshManager:
         )
 
     def _persist_record(self, record: Dict[str, Any]) -> None:
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self.cache_path.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        write_json_atomic(self.cache_path, record)
 
     def _load_cached_record(self) -> Dict[str, Any]:
         if not self.cache_path.exists():

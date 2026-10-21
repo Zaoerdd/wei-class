@@ -35,6 +35,14 @@ SWP_SHOWWINDOW = 0x0040
 user32 = ctypes.windll.user32
 
 
+def write_json_atomic(path: Path, data: dict) -> None:
+    """Write via a temp file + rename so a crash mid-write never leaves a broken file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+    temp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp_path, path)
+
+
 class OpenIdCollectorError(RuntimeError):
     """Raised when the WeChat automation flow cannot complete safely."""
 
@@ -152,11 +160,7 @@ class WeChatOpenIdCollector:
         }
 
     def write_result(self, result: dict) -> None:
-        self.config.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self.config.output_path.write_text(
-            json.dumps(result, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        write_json_atomic(self.config.output_path, result)
         self.logger.info(
             "result written to %s (%s)",
             self.config.output_path,
