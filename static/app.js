@@ -129,16 +129,16 @@ function getUiTone(status) {
     const resultMeta = status.result_meta || {};
 
     if (openidStatus.listening_enabled === false) {
-        return {tone: "idle", pill: "已暂停", title: "签到监听已暂停",
-            description: openidStatus.is_refreshing ? "正在重新获取 OpenID，完成后仍保持暂停。" : "点击开始监听后继续；暂停期间不会自动获取登录信息或处理新签到。"};
+        return {tone: "idle", pill: "已暂停", title: "自动签到已暂停",
+            description: openidStatus.is_refreshing ? "正在重新识别登录，完成后仍然保持暂停。" : "点上面的按钮继续；暂停期间不会处理新签到。"};
     }
 
     if (resultMeta.is_error) {
         return {
             tone: "danger",
             pill: "需要处理",
-            title: "签到流程出现异常",
-            description: safeText(resultMeta.frontend_message || openidStatus.last_error, "请检查微信状态，或改用手动 OpenID。"),
+            title: "这次没处理成功",
+            description: safeText(resultMeta.frontend_message || openidStatus.last_error, "往下面“先检查一遍”看一眼，或者用备用方式手动登录。"),
         };
     }
 
@@ -146,8 +146,8 @@ function getUiTone(status) {
         return {
             tone: "success",
             pill: "已完成",
-            title: "签到任务已完成",
-            description: safeText(resultMeta.frontend_message, "本次签到已经提交完成。"),
+            title: "这次签到完成了",
+            description: safeText(resultMeta.frontend_message, "已经提交成功。"),
         };
     }
 
@@ -155,8 +155,8 @@ function getUiTone(status) {
         return {
             tone: "running",
             pill: qrAutoLabel(resultMeta) || "等待扫码",
-            title: qrAutoLabel(resultMeta) || "二维码已准备好",
-            description: resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "请直接使用右侧二维码完成签到。",
+            title: qrAutoLabel(resultMeta) || "二维码好了",
+            description: resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "用右边的二维码扫一下就能签。",
         };
     }
 
@@ -164,45 +164,45 @@ function getUiTone(status) {
         return {
             tone: "warning",
             pill: "处理中",
-            title: `检测到 ${status.active_sign_count} 个签到任务`,
-            description: "系统正在自动处理当前任务，请保持页面打开。",
+            title: `有 ${status.active_sign_count} 个签到要处理`,
+            description: "正在自动处理，先别关这个页面。",
         };
     }
 
     if (openidStatus.is_refreshing) {
         return {
             tone: "running",
-            pill: "获取中",
-            title: "正在自动获取 OpenID",
-            description: "请保持微信和微助教页面可访问，获取成功后会自动进入监听。",
+            pill: "识别中",
+            title: "正在识别你的微信登录",
+            description: "会自己切到微信找微助教，几秒就好，先别关微信。",
         };
     }
 
     if (openidStatus.has_openid) {
         return {
             tone: "success",
-            pill: "监听中",
-            title: "已进入自动监听",
-            description: openidStatus.qr_auto_enabled ? "正在监听新任务；二维码自动打开已启用，仅发送到文件传输助手。" : "OpenID 已就绪，系统会继续等待新的签到任务。",
+            pill: "在等签到",
+            title: "正在帮你盯着",
+            description: openidStatus.qr_auto_enabled ? "遇到二维码签到会自动打开，并发到文件传输助手。" : "有签到会立刻处理，不用一直看着。",
         };
     }
 
     if (openidStatus.last_error) {
         return {
             tone: "danger",
-            pill: "自动获取失败",
-            title: "自动获取 OpenID 未成功",
+            pill: "没识别成功",
+            title: "登录没识别出来",
             description: openidStatus.refresh_failures && openidStatus.next_refresh_at
-                ? `系统将在 ${formatTime(openidStatus.next_refresh_at)} 自动重试。请保持微信登录；获取期间会自动切到微信并搜索微助教。`
-                : "你可以检查微信窗口状态，或者在下方直接手动输入 OpenID。",
+                ? `系统会在 ${formatTime(openidStatus.next_refresh_at)} 再试一次；期间会自动切到微信搜索微助教。`
+                : "先看看微信有没有登录，或者用下面的备用方式粘贴链接。",
         };
     }
 
     return {
         tone: "idle",
         pill: "准备中",
-        title: "等待自动化服务就绪",
-        description: "服务启动后会自动尝试获取 OpenID，并持续监听签到状态。",
+        title: "正在准备",
+        description: "马上就好，先别关页面。",
     };
 }
 
@@ -218,10 +218,10 @@ function renderBanner(status) {
         toneClass = "notice-banner--danger";
     } else if (openidStatus.last_error) {
         message = openidStatus.listening_enabled === false
-            ? "获取 OpenID 未成功，监听仍保持暂停。检查微信后，可点击顶部重新获取按钮。"
+            ? "登录没识别成功，现在仍是暂停状态。看看微信有没有登录，再点上面的“重新识别登录”。"
             : openidStatus.has_openid
-                ? "重新获取未成功，继续使用当前 OpenID；它失效时会自动重新获取。"
-                : "获取 OpenID 未成功，系统会自动重试；也可以检查微信后点击顶部重新获取按钮。";
+                ? "这次没识别成功，先用着之前的登录；万一失效会自动再试。"
+                : "登录没识别成功，系统会自动再试；也可以看看微信再点“重新识别登录”。";
         toneClass = "notice-banner--warning";
     } else if (resultMeta.qr_ready && !resultMeta.sign_completed) {
         message = resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "二维码已经准备好，直接在结果面板扫码即可。";
@@ -246,8 +246,6 @@ function renderHero(status) {
     $("overall-pill").textContent = tone.pill;
     $("overall-title").textContent = tone.title;
     $("overall-description").textContent = tone.description;
-    $("collector-method").textContent = collectorLabel(openidStatus.collector_method);
-    $("openid-source").textContent = sourceLabel(openidStatus.current_source);
     $("refresh-time").textContent = formatTime(openidStatus.last_refresh_at);
 }
 
@@ -257,13 +255,13 @@ function renderOverview(status) {
     const profile = status.profile || openidStatus.profile || {};
     const currentSign = status.current_sign || null;
 
-    $("openid-summary").textContent = openidStatus.openid_masked || "等待自动获取";
+    $("openid-summary").textContent = openidStatus.has_openid ? "已登录" : "还没登录";
     $("openid-note").textContent = openidStatus.has_openid
-        ? `最近更新时间：${formatTime(openidStatus.last_refresh_at)}`
-        : "自动获取失败时，可以手动粘贴 OpenID 或完整链接。";
+        ? `最近更新：${formatTime(openidStatus.last_refresh_at)}`
+        : "自动识别你的账号，不用手动填。";
 
     const profileParts = [profile.name, profile.class_name, profile.student_number].filter(Boolean);
-    $("profile-summary").textContent = profileParts.length ? profileParts.join(" / ") : "尚未识别";
+    $("profile-summary").textContent = profileParts.length ? profileParts.join(" / ") : "还没识别";
     $("profile-note").textContent = profile.college_name || profile.department_name || "登录后会自动识别学生信息。";
 
     $("task-summary").textContent = currentSign
@@ -271,7 +269,7 @@ function renderOverview(status) {
         : "暂无任务";
     $("task-note").textContent = status.active_sign_count > 0
         ? `当前共有 ${status.active_sign_count} 个任务待处理`
-        : "发现任务后会自动刷新到这里。";
+        : "有任务会自动出现在这里。";
 
     if (resultMeta.sign_completed) {
         $("result-summary").textContent = "签到完成";
@@ -281,10 +279,10 @@ function renderOverview(status) {
         $("result-note").textContent = resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "请在结果面板直接扫码完成签到。";
     } else if (resultMeta.is_error) {
         $("result-summary").textContent = "处理异常";
-        $("result-note").textContent = safeText(resultMeta.frontend_message, "请刷新或重新获取 OpenID。");
+        $("result-note").textContent = safeText(resultMeta.frontend_message, "刷新一下，或者点“重新识别登录”。");
     } else {
         $("result-summary").textContent = "等待中";
-        $("result-note").textContent = "二维码、自动签到和异常提示都会集中展示。";
+        $("result-note").textContent = "二维码和签到结果都在这里看。";
     }
 }
 
@@ -293,32 +291,32 @@ function renderTimeline(status) {
     const resultMeta = status.result_meta || {};
     const steps = [
         {
-            title: "获取 OpenID",
-            description: openidStatus.has_openid ? "当前 OpenID 已经就绪。" : "系统正在自动获取或等待你手动输入。",
+            title: "识别登录",
+            description: openidStatus.has_openid ? "已经认出你的账号。" : "正在识别，或者等你手动粘贴链接。",
             done: Boolean(openidStatus.has_openid),
             active: Boolean(openidStatus.is_refreshing),
         },
         {
-            title: "进入监听",
-            description: status.is_running ? "已进入自动监听状态。" : "监听尚未启动。",
+            title: "开始等待",
+            description: status.is_running ? "已经在盯着了。" : "还没开始。",
             done: Boolean(status.is_running),
             active: Boolean(status.is_running && status.active_sign_count === 0),
         },
         {
             title: "发现签到",
-            description: status.active_sign_count > 0 ? `当前发现 ${status.active_sign_count} 个任务。` : "还没有检测到新的签到任务。",
+            description: status.active_sign_count > 0 ? `现在有 ${status.active_sign_count} 个任务。` : "还没遇到新的签到。",
             done: status.active_sign_count > 0,
             active: status.active_sign_count > 0 && !resultMeta.result_ready,
         },
         {
-            title: "输出结果",
+            title: "处理完成",
             description: resultMeta.sign_completed
                 ? "签到已完成。"
                 : resultMeta.qr_ready
-                    ? "二维码已生成。"
+                    ? "二维码已经生成。"
                     : resultMeta.is_error
-                        ? "流程遇到异常。"
-                        : "等待生成结果。",
+                        ? "这一步出错了。"
+                        : "还在等结果。",
             done: Boolean(resultMeta.result_ready),
             active: Boolean(resultMeta.result_ready && !resultMeta.sign_completed && !resultMeta.is_error),
         },
@@ -372,8 +370,8 @@ function renderActiveSigns(status) {
     if (!activeSigns.length) {
         signsContainer.innerHTML = `
             <div class="empty-state">
-                <strong>当前没有签到任务</strong>
-                <p>${status.openid_status?.listening_enabled === false ? "监听已暂停，点击开始监听后检测新任务。" : "检测到新任务后会自动显示在这里。"}</p>
+                <strong>现在没有签到</strong>
+                <p>${status.openid_status?.listening_enabled === false ? "现在是暂停状态，点上面的按钮才会继续检测。" : "有新任务会自动显示在这里。"}</p>
             </div>
         `;
         return;
@@ -454,17 +452,17 @@ function renderResult(status) {
                 ? "任务处理出现异常"
                 : currentSign
                     ? "任务正在处理中"
-                    : "等待新任务";
+                    : "等着就行";
 
     const description = resultMeta.sign_completed
         ? safeText(resultMeta.frontend_message, "本次签到已经处理完成。")
         : resultMeta.qr_ready
             ? (resultMeta.qr_auto_state ? safeText(resultMeta.frontend_message) : "请直接使用下面的二维码扫码签到，也可以复制链接在其他设备打开。")
             : resultMeta.is_error
-                ? safeText(resultMeta.frontend_message, "请刷新页面，必要时重新获取 OpenID。")
+                ? safeText(resultMeta.frontend_message, "刷新一下页面；还不行就重新识别登录。")
                 : currentSign
                     ? "任务已经识别到，系统正在等待二维码或自动提交结果。"
-                    : "还没有可展示的二维码或结果。";
+                    : "有签到会自动出现在这里。";
 
     resultPanel.innerHTML = `
         <div class="result-card">
@@ -575,7 +573,7 @@ function renderStatus(status) {
     if (refreshFinished) {
         $("control-feedback").textContent = status.openid_status.last_error
             ? "获取未成功，请查看下方运行信息中的错误原因。"
-            : (status.openid_status.listening_enabled ? "OpenID 已更新，监听继续。" : "OpenID 已更新，监听仍保持暂停。");
+            : (status.openid_status.listening_enabled ? "登录已更新，继续帮你盯着。" : "登录已更新，但现在是暂停状态。");
     }
     renderBanner(status);
     renderHero(status);
@@ -593,9 +591,9 @@ function renderStatus(status) {
 function renderControls() {
     const status = state.lastStatus?.openid_status;
     const toggle = $("listen-toggle-btn");
-    toggle.textContent = status?.listening_enabled ? "暂停监听" : "开始监听";
+    toggle.textContent = status?.listening_enabled ? "暂停自动签到" : "开始自动签到";
     toggle.disabled = !status || state.controlBusy;
-    $("openid-refresh-btn").textContent = status?.is_refreshing ? "正在获取 OpenID…" : "重新获取 OpenID";
+    $("openid-refresh-btn").textContent = status?.is_refreshing ? "正在识别…" : "重新识别登录";
     $("openid-refresh-btn").disabled = !status || state.controlBusy || status.is_refreshing;
 }
 
@@ -629,7 +627,7 @@ async function fetchHistory() {
         if (text === state.lastHistoryJson) return;
         state.lastHistoryJson = text;
         const history = JSON.parse(text);
-        $("history-count").textContent = `${history.total} 条记录`;
+        $("history-count").textContent = `${history.total} 条`;
         container.innerHTML = history.records.length ? history.records.map(row => `
             <article class="sign-card">
                 <div class="card-topline"><div>
@@ -694,11 +692,11 @@ async function submitManualOpenId(event) {
     const openid = extractOpenId(rawValue);
 
     if (!openid) {
-        showFeedback("请输入 32 位 OpenID，或粘贴带 openid= 的完整链接。", "error");
+        showFeedback("请粘贴微助教链接（也支持 32 位 OpenID）。", "error");
         return;
     }
 
-    showFeedback("正在启用这个 OpenID...");
+    showFeedback("正在用这个链接登录...");
 
     try {
         const response = await fetch("/api/login", {
@@ -713,15 +711,15 @@ async function submitManualOpenId(event) {
             throw new Error(payload.message || "manual login failed");
         }
         $("openid-input").value = openid;
-        showFeedback("OpenID 已启用，页面正在刷新状态。", "success");
+        showFeedback("登录已切换，正在刷新状态。", "success");
         await fetchStatus();
     } catch (error) {
-        showFeedback("这个 OpenID 无法使用，可能已失效，请重新获取后再试。", "error");
+        showFeedback("这个登录用不了，可能已经过期。重新识别一次再试。", "error");
     }
 }
 
 async function logoutCurrentSession() {
-    showFeedback("正在停止当前监听...");
+    showFeedback("正在暂停...");
     try {
         const response = await fetch("/api/logout", {
             method: "POST",
@@ -729,10 +727,10 @@ async function logoutCurrentSession() {
         if (!response.ok) {
             throw new Error("logout failed");
         }
-        showFeedback("已退出登录并暂停监听。点击开始监听后才会恢复。", "success");
+        showFeedback("已退出并暂停。点上面的按钮才会继续。", "success");
         await fetchStatus();
     } catch (error) {
-        showFeedback("停止监听失败，请稍后重试。", "error");
+        showFeedback("暂停失败，稍后再试一次。", "error");
     }
 }
 

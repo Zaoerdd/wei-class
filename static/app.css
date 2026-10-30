@@ -155,7 +155,8 @@ a {
 }
 
 .hero-card h1 {
-    max-width: 12ch;
+    /* 12ch was tuned for Latin text; on CJK it wraps after ~6 characters. */
+    max-width: 18ch;
     font-size: clamp(2.2rem, 3vw, 3.5rem);
 }
 
@@ -800,6 +801,39 @@ a {
     margin: 4px 0 0;
     font-size: 13px;
     color: var(--muted);
+}
+
+.advanced-info {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--surface-border);
+}
+
+.advanced-info summary {
+    width: fit-content;
+    color: var(--muted);
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    list-style: none;
+}
+
+.advanced-info summary::-webkit-details-marker {
+    display: none;
+}
+
+.advanced-info summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 6px;
+}
+
+.advanced-info[open] summary::before {
+    content: "▾";
+}
+
+.advanced-info .detail-list {
+    margin-top: 12px;
 }
 
 @media (max-width: 960px) {

@@ -12,39 +12,31 @@
     <div class="page-shell">
         <header class="hero-card reveal">
             <div class="hero-copy">
-                <p class="eyebrow">WEI CLASS ASSISTANT</p>
-                <h1>签到助手，双击就能用</h1>
+                <p class="eyebrow">微助教 · 只在这台电脑上运行</p>
+                <h1>开着它，签到不用盯</h1>
                 <p class="hero-description">
-                    自由控制开始与暂停，随时重新获取登录信息。确认成功的签到会保存在本机，重启后仍可查看。
+                    会自动认出你的微助教账号。发现签到就处理，成功的记录留在本机。
                 </p>
                 <div class="hero-actions">
                     <button class="btn btn-primary" id="listen-toggle-btn" type="button" disabled>正在连接…</button>
-                    <button class="btn btn-secondary" id="openid-refresh-btn" type="button" disabled>重新获取 OpenID</button>
-                    <button class="btn btn-subtle" id="refresh-btn" type="button">刷新状态</button>
-                    <a class="btn btn-secondary" href="/usage">查看新手说明</a>
+                    <button class="btn btn-secondary" id="openid-refresh-btn" type="button" disabled>重新识别登录</button>
+                    <button class="btn btn-subtle" id="refresh-btn" type="button">刷新</button>
+                    <a class="btn btn-secondary" href="/usage">新手说明</a>
                 </div>
                 <p class="form-feedback" id="control-feedback" role="status" aria-live="polite"></p>
                 <div class="quick-steps">
-                    <span>1. 双击 <code>一键启动.bat</code></span>
-                    <span>2. 保持微信登录，程序会自动寻找入口</span>
-                    <span>3. 点击开始监听，随时可以暂停</span>
+                    <span>1. 微信保持登录</span>
+                    <span>2. 点上面的按钮开始</span>
+                    <span>3. 之后不用管，随时可以暂停</span>
                 </div>
             </div>
             <aside class="hero-panel">
                 <span class="state-pill state-pill--idle" id="overall-pill">准备中</span>
-                <h2 id="overall-title">正在连接本地服务</h2>
-                <p id="overall-description">首次运行会自动安装依赖，完成后会自行进入待命状态。</p>
+                <h2 id="overall-title">正在连接</h2>
+                <p id="overall-description">稍等几秒，连上后这里会显示当前状态。</p>
                 <div class="hero-metrics">
                     <div>
-                        <span>OpenID 获取方式</span>
-                        <strong id="collector-method">检测中</strong>
-                    </div>
-                    <div>
-                        <span>当前来源</span>
-                        <strong id="openid-source">等待中</strong>
-                    </div>
-                    <div>
-                        <span>最近刷新</span>
+                        <span>最近更新</span>
                         <strong id="refresh-time">-</strong>
                     </div>
                 </div>
@@ -55,32 +47,32 @@
 
         <section class="overview-grid reveal" aria-label="概览">
             <article class="overview-card">
-                <span class="overview-label">OpenID</span>
-                <strong class="overview-value" id="openid-summary">等待自动获取</strong>
-                <p class="overview-note" id="openid-note">如果自动获取失败，可以在下方手动粘贴。</p>
+                <span class="overview-label">登录状态</span>
+                <strong class="overview-value" id="openid-summary">还没登录</strong>
+                <p class="overview-note" id="openid-note">自动识别你的账号，不用手动填。</p>
             </article>
             <article class="overview-card">
-                <span class="overview-label">当前用户</span>
-                <strong class="overview-value" id="profile-summary">尚未识别</strong>
-                <p class="overview-note" id="profile-note">登录后会显示姓名、班级和学号。</p>
+                <span class="overview-label">我是谁</span>
+                <strong class="overview-value" id="profile-summary">还没识别</strong>
+                <p class="overview-note" id="profile-note">登录后显示姓名、班级和学号。</p>
             </article>
             <article class="overview-card">
                 <span class="overview-label">签到任务</span>
                 <strong class="overview-value" id="task-summary">暂无任务</strong>
-                <p class="overview-note" id="task-note">发现任务后会自动刷新到这里。</p>
+                <p class="overview-note" id="task-note">有任务会自动出现在这里。</p>
             </article>
             <article class="overview-card">
                 <span class="overview-label">处理结果</span>
                 <strong class="overview-value" id="result-summary">等待中</strong>
-                <p class="overview-note" id="result-note">二维码、自动签到和异常提示都会集中展示。</p>
+                <p class="overview-note" id="result-note">二维码和签到结果都在这里看。</p>
             </article>
         </section>
 
         <section class="panel reveal" aria-labelledby="timeline-title">
             <div class="panel-heading">
                 <div>
-                    <p class="panel-eyebrow">流程进度</p>
-                    <h2 id="timeline-title">当前自动化阶段</h2>
+                    <p class="panel-eyebrow">进度</p>
+                    <h2 id="timeline-title">现在进行到哪一步</h2>
                 </div>
             </div>
             <div class="timeline" id="timeline"></div>
@@ -101,14 +93,14 @@
             <article class="panel reveal" aria-labelledby="result-title">
                 <div class="panel-heading">
                     <div>
-                        <p class="panel-eyebrow">结果面板</p>
-                        <h2 id="result-title">二维码与执行结果</h2>
+                        <p class="panel-eyebrow">结果</p>
+                        <h2 id="result-title">二维码与结果</h2>
                     </div>
                 </div>
                 <div class="result-panel" id="result-panel">
                     <div class="empty-state">
-                        <strong>还没有可展示的结果</strong>
-                        <p>检测到二维码签到后，这里会直接生成可扫码的二维码。</p>
+                        <strong>还没有结果</strong>
+                        <p>遇到二维码签到时，这里会直接给出可以扫的码。</p>
                     </div>
                 </div>
             </article>
@@ -116,19 +108,19 @@
             <article class="panel reveal" aria-labelledby="delay-title">
                 <div class="panel-heading">
                     <div>
-                        <p class="panel-eyebrow">签到延迟</p>
-                        <h2 id="delay-title">不总抢在前几名</h2>
+                        <p class="panel-eyebrow">晚一点再签</p>
+                        <h2 id="delay-title">别总是第一个</h2>
                     </div>
                 </div>
                 <form class="manual-form" id="delay-form">
-                    <label for="delay-min">普通 / GPS 签到在检测到后随机等待（秒）</label>
+                    <label for="delay-min">检测到普通签到后，随机等一会儿再提交（秒）</label>
                     <div class="form-actions">
                         <input id="delay-min" type="number" min="0" max="600" step="1" inputmode="numeric" aria-label="最短等待秒数" placeholder="最短">
                         <span>至</span>
                         <input id="delay-max" type="number" min="0" max="600" step="1" inputmode="numeric" aria-label="最长等待秒数" placeholder="最长">
                         <button class="btn btn-primary" id="delay-submit" type="submit">保存</button>
                     </div>
-                    <p class="form-hint">两个都填 0 表示不延迟。二维码签到不受影响。延迟太长，老师提前结束签到时可能会错过。</p>
+                    <p class="form-hint">两个都填 0 就是不延迟。二维码签到不受影响。等太久可能错过老师提前结束的签到。</p>
                     <p class="form-feedback" id="delay-feedback" role="status" aria-live="polite"></p>
                 </form>
             </article>
@@ -136,82 +128,76 @@
             <article class="panel reveal" aria-labelledby="manual-title">
                 <div class="panel-heading">
                     <div>
-                        <p class="panel-eyebrow">手动兜底</p>
-                        <h2 id="manual-title">不会操作命令行也能补救</h2>
+                        <p class="panel-eyebrow">备用方式</p>
+                        <h2 id="manual-title">自动识别不成功时</h2>
                     </div>
                 </div>
                 <form class="manual-form" id="manual-form">
-                    <label for="openid-input">粘贴 OpenID 或完整链接</label>
+                    <label for="openid-input">粘贴微助教链接</label>
                     <input
                         id="openid-input"
                         name="openid"
                         type="text"
                         autocomplete="off"
-                        placeholder="支持 32 位 OpenID，或粘贴带 openid= 的完整链接"
+                        placeholder="从微信里复制微助教页面链接，粘到这里"
                     >
                     <p class="form-hint">
-                        自动模式优先，只有自动获取失败或你想临时切换账号时，才需要手动输入。
+                        平时用不到，只在自动识别反复失败时再用。也支持直接填 32 位 OpenID。
                     </p>
                     <div class="form-actions">
-                        <button class="btn btn-primary" id="manual-submit" type="submit">手动启用这个 OpenID</button>
-                        <button class="btn btn-secondary hidden" id="logout-btn" type="button">退出登录并暂停</button>
+                        <button class="btn btn-primary" id="manual-submit" type="submit">用这个链接登录</button>
+                        <button class="btn btn-secondary hidden" id="logout-btn" type="button">退出并暂停</button>
                     </div>
                     <p class="form-feedback" id="manual-feedback" aria-live="polite"></p>
                 </form>
             </article>
 
-            <article class="panel reveal" aria-labelledby="runtime-title">
-                <div class="panel-heading">
-                    <div>
-                        <p class="panel-eyebrow">运行信息</p>
-                        <h2 id="runtime-title">排查时最常用的状态</h2>
-                    </div>
-                </div>
-                <dl class="detail-list" id="runtime-details"></dl>
-            </article>
-
             <article class="panel reveal" aria-labelledby="health-title">
                 <div class="panel-heading">
                     <div>
-                        <p class="panel-eyebrow">环境体检</p>
-                        <h2 id="health-title">先看哪一步出了问题</h2>
+                        <p class="panel-eyebrow">出问题时</p>
+                        <h2 id="health-title">先检查一遍</h2>
                     </div>
                     <button class="btn btn-secondary" id="health-btn" type="button">开始检查</button>
                 </div>
-                <p class="form-hint">检查服务、OpenID、监听、系统代理、证书、界面模板、微信进程和磁盘。只读检查，不会操作微信窗口。</p>
+                <p class="form-hint">看一遍登录、代理、证书、模板、微信和磁盘有没有问题。只看不改，随时可以点。</p>
                 <div class="health-list" id="health-list">
                     <div class="empty-state">
-                        <strong>还没有检查结果</strong>
-                        <p>点右上角“开始检查”，几秒内就能看完整个环境。</p>
+                        <strong>还没检查过</strong>
+                        <p>点“开始检查”，几秒就能看完。</p>
                     </div>
                 </div>
                 <p class="form-feedback" id="health-feedback" role="status" aria-live="polite"></p>
+                <details class="advanced-info">
+                    <summary>高级信息（排查用）</summary>
+                    <dl class="detail-list" id="runtime-details"></dl>
+                </details>
             </article>
         </section>
 
         <section class="panel reveal" aria-labelledby="history-title">
             <div class="panel-heading">
                 <div>
-                    <p class="panel-eyebrow">本机保存 · 最近 100 条</p>
-                    <h2 id="history-title">我的签到成功记录</h2>
+                    <p class="panel-eyebrow">只存在这台电脑</p>
+                    <h2 id="history-title">签到成功记录</h2>
                 </div>
-                <span class="panel-badge" id="history-count">0 条记录</span>
+                <span class="panel-badge" id="history-count">0 条</span>
             </div>
-            <p class="form-hint">仅保存本工具确认成功的签到，显示的是确认时间；未自动同步平台历史记录。</p>
+            <p class="form-hint">只记这里确认成功的签到，不会去同步平台的历史。</p>
             <div class="card-stack" id="sign-history" aria-live="polite"></div>
         </section>
 
         <section class="panel reveal" aria-labelledby="signed-title">
             <div class="panel-heading">
                 <div>
-                    <p class="panel-eyebrow">签到明细</p>
-                    <h2 id="signed-title">已识别的签到成员</h2>
+                    <p class="panel-eyebrow">签到名单</p>
+                    <h2 id="signed-title">谁签到了</h2>
                 </div>
             </div>
             <div class="student-list" id="signed-students">
                 <div class="empty-state">
-                    <strong>暂无签到成员数据</strong>
-                    <p>如果当前任务支持返回签到名单，这里会自动按顺序显示。</p>
+                    <strong>还没有名单</strong>
+                    <p>任务能返回名单时，这里会按顺序列出来。</p>
                 </div>
             </div>
         </section>
