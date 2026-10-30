@@ -210,7 +210,7 @@ class CVWeChatOpenIdCollector:
         self.close_timeout = float(os.getenv("WECHAT_CV_CLOSE_TIMEOUT", "6.0"))
         self.close_poll_interval = float(os.getenv("WECHAT_CV_CLOSE_POLL_INTERVAL", "0.4"))
         self.capture_proxy_host = os.getenv("WECHAT_CV_PROXY_HOST", "127.0.0.1").strip() or "127.0.0.1"
-        self.capture_proxy_port = int(os.getenv("WECHAT_CV_PROXY_PORT", "8080"))
+        self.capture_proxy_port = int(os.getenv("WECHAT_CV_PROXY_PORT", "18080"))
         self.capture_proxy_connect_timeout = float(os.getenv("WECHAT_CV_PROXY_CONNECT_TIMEOUT", "2.0"))
         self.auto_switch_system_proxy = self._read_bool_env("WECHAT_CV_AUTO_SWITCH_SYSTEM_PROXY", True)
         self.openid_source = os.getenv("WECHAT_CV_OPENID_SOURCE", "mitmproxy").strip().lower()

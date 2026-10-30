@@ -105,7 +105,9 @@ powershell -ExecutionPolicy Bypass -File .\uninstall_session_keeper.ps1   # 卸�
 - 新老微信双方案兼容
   启动时可选择 `uiautomation` 或 `cv`
 - 新版微信自动切代理
-  `cv` 模式会在采集时临时把 Windows 系统代理切到 `127.0.0.1:8080`，采集完成后自动恢复原设置
+  `cv` 模式会在采集时临时把 Windows 系统代理切到 `127.0.0.1:18080`，采集完成后自动恢复原设置
+- 环境体检
+  页面上的“环境体检”会一次性检查服务、`openid`、监听、代理残留、证书、模板、微信进程和磁盘，异常项直接给出下一步建议
 
 ## 工作流程
 
@@ -137,7 +139,7 @@ powershell -ExecutionPolicy Bypass -File .\uninstall_session_keeper.ps1   # 卸�
 
 如果你的机器原本已经有系统代理，比如 `127.0.0.1:7890`，项目提供的 `start_mitmproxy_openid.ps1` 会自动把 `mitmproxy` 挂在这个代理前面，形成：
 
-`微信 -> 127.0.0.1:8080(mitmproxy) -> 127.0.0.1:7890(原代理) -> 外网`
+`微信 -> 127.0.0.1:18080(mitmproxy) -> 127.0.0.1:7890(原代理) -> 外网`
 
 ## 环境要求
 
@@ -334,7 +336,7 @@ python -m venv .venv-mitm
 这个脚本会：
 
 - 启动 [mitmproxy_openid_addon.py](mitmproxy_openid_addon.py)
-- 默认监听 `127.0.0.1:8080`
+- 默认监听 `127.0.0.1:18080`
 - 自动把当前已有的系统代理作为 upstream
 - 把抓到的 `openid` 写入 `logs/mitm_openid_result.txt`
 
@@ -361,8 +363,8 @@ powershell -ExecutionPolicy Bypass -File .\start_web_app.ps1 -OpenIdMethod cv
 
 `cv` 采集器会在真正采集时：
 
-1. 检查 `127.0.0.1:8080` 是否有可用的 `mitmproxy`
-2. 临时切换系统代理到 `127.0.0.1:8080`
+1. 检查 `127.0.0.1:18080` 是否有可用的 `mitmproxy`
+2. 临时切换系统代理到 `127.0.0.1:18080`
 3. 点击微信界面并抓取 `openid`
 4. 自动恢复原来的系统代理
 
@@ -442,7 +444,7 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 | `WECHAT_CV_CLOSE_TIMEOUT` | `6.0` | 等待关闭按钮出现/确认关闭的超时时间 |
 | `WECHAT_CV_CLOSE_POLL_INTERVAL` | `0.4` | 关闭按钮重试间隔 |
 | `WECHAT_CV_PROXY_HOST` | `127.0.0.1` | 本地抓包代理地址 |
-| `WECHAT_CV_PROXY_PORT` | `8080` | 本地抓包代理端口 |
+| `WECHAT_CV_PROXY_PORT` | `18080` | 本地抓包代理端口 |
 | `WECHAT_CV_PROXY_CONNECT_TIMEOUT` | `2.0` | 检测 mitm 可用性的连接超时 |
 | `WECHAT_CV_AUTO_SWITCH_SYSTEM_PROXY` | `1` | 是否自动切换/恢复系统代理 |
 | `WECHAT_CV_MITM_RESULT_PATH` | `logs/mitm_openid_result.txt` | mitm 输出文件 |
@@ -472,6 +474,8 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
   查看当前自动会话状态
 - [http://127.0.0.1:5000/api/openid_status](http://127.0.0.1:5000/api/openid_status)
   查看 `openid` 刷新状态。接口只返回 `has_openid` 和脱敏后的 `openid_masked`，不返回完整 `openid`；完整值只保存在本机 `logs/latest_openid.json`
+- [http://127.0.0.1:5000/api/health](http://127.0.0.1:5000/api/health)
+  环境体检。返回 `overall`（`ok` / `warn` / `fail`）和逐项 `checks`，覆盖服务运行时长、采集方式、`openid`、监听管道、最近一次错误、系统代理是否残留抓包设置、`mitmproxy` 证书、`cv` 模板是否齐全、微信进程、日志目录与磁盘空间。每项都带 `status`（`ok` / `warn` / `fail` / `skip`）、`detail` 和给用户看的 `hint`。接口是只读检查，不会启动采集，也不会操作微信窗口，可以随时刷新
 
 访问限制：
 
@@ -553,7 +557,7 @@ $env:WECHAT_CV_MITM_RESULT_PATH = "...\wei-class\logs\mitm_openid_result.txt"
 原因：
 
 - `mitmproxy` 没有启动
-- 监听地址不是 `127.0.0.1:8080`
+- 监听地址不是 `127.0.0.1:18080`
 - 端口被占用
 
 解决：

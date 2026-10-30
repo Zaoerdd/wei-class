@@ -169,6 +169,24 @@
                 </div>
                 <dl class="detail-list" id="runtime-details"></dl>
             </article>
+
+            <article class="panel reveal" aria-labelledby="health-title">
+                <div class="panel-heading">
+                    <div>
+                        <p class="panel-eyebrow">环境体检</p>
+                        <h2 id="health-title">先看哪一步出了问题</h2>
+                    </div>
+                    <button class="btn btn-secondary" id="health-btn" type="button">开始检查</button>
+                </div>
+                <p class="form-hint">检查服务、OpenID、监听、系统代理、证书、界面模板、微信进程和磁盘。只读检查，不会操作微信窗口。</p>
+                <div class="health-list" id="health-list">
+                    <div class="empty-state">
+                        <strong>还没有检查结果</strong>
+                        <p>点右上角“开始检查”，几秒内就能看完整个环境。</p>
+                    </div>
+                </div>
+                <p class="form-feedback" id="health-feedback" role="status" aria-live="polite"></p>
+            </article>
         </section>
 
         <section class="panel reveal" aria-labelledby="history-title">

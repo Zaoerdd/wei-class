@@ -10,6 +10,9 @@ import os
 import queue
 import random
 import re
+import shutil
+import socket
+import subprocess
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -1510,6 +1513,7 @@ openid_refresh_manager = None
 app = Flask(__name__)
 runtime_init_lock = threading.Lock()
 runtime_initialized = False
+SERVICE_STARTED_AT = datetime.now(timezone.utc)
 
 
 def configure_runtime(openid_method: Optional[str] = None) -> None:
@@ -1672,6 +1676,202 @@ def set_sign_delay():
     openid_refresh_manager.set_sign_delay(minimum, maximum)
     message = "已关闭签到延迟" if maximum == 0 else f"已保存：普通/GPS 签到将随机延迟 {minimum}–{maximum} 秒后提交"
     return jsonify(success=True, message=message)
+
+
+HEALTH_DISK_WARN_BYTES = 500 * 1024 * 1024
+
+
+def _health_item(key: str, label: str, status: str, detail: str, hint: Optional[str] = None) -> Dict[str, Any]:
+    return {"id": key, "label": label, "status": status, "detail": detail, "hint": hint}
+
+
+def _port_is_listening(port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.3)
+            return sock.connect_ex(("127.0.0.1", port)) == 0
+    except OSError:
+        return False
+
+
+def _capture_port() -> int:
+    # Ask the collector what it actually uses; the env var alone would disagree with
+    # a running instance configured through start_local.ps1.
+    configured = getattr(collector, "capture_proxy_port", None)
+    if isinstance(configured, int):
+        return configured
+    return safe_int(os.getenv("WECHAT_CV_PROXY_PORT")) or 18080
+
+
+def _wechat_process_names() -> List[str]:
+    """Running WeChat executables; the 4.x client ships as Weixin.exe."""
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("读取进程列表失败: %s", exc)
+        return []
+    found: List[str] = []
+    for line in completed.stdout.splitlines():
+        name = line.split('","')[0].strip('"').lower()
+        if name in ("wechat.exe", "weixin.exe") and name not in found:
+            found.append(name)
+    return found
+
+
+def _check_proxy_health(capture_port: int) -> Dict[str, Any]:
+    reader = getattr(collector, "_read_system_proxy_settings", None)
+    if not callable(reader):
+        return _health_item("proxy", "系统代理", "skip", "当前采集方式不读取系统代理")
+    try:
+        snapshot = reader()
+    except Exception as exc:  # registry read failures must not break the page
+        return _health_item("proxy", "系统代理", "warn", f"读取失败：{exc}", "重启服务后再试；抓包期间请勿手动改代理")
+    target = str(capture_port)
+    points_to_capture = (snapshot.proxy_enable == 1 and target in (snapshot.proxy_server or "")) or (
+        target in (snapshot.auto_config_url or "")
+    )
+    capture_running = _port_is_listening(capture_port)
+    if points_to_capture and capture_running:
+        return _health_item("proxy", "系统代理", "ok", f"抓包代理使用中（127.0.0.1:{capture_port}）", "获取完成会自动恢复；期间不要手动改代理")
+    if points_to_capture:
+        return _health_item(
+            "proxy",
+            "系统代理",
+            "fail",
+            f"系统代理仍指向 {snapshot.proxy_server or snapshot.auto_config_url}，但抓包程序已退出",
+            "此时浏览器和微信可能上不了网：重启服务会自动恢复，或运行 停止服务.bat",
+        )
+    return _health_item("proxy", "系统代理", "ok", "未发现抓包残留")
+
+
+def _check_certificate_health() -> Dict[str, Any]:
+    cert_path = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem"
+    if cert_path.exists():
+        return _health_item("cert", "抓包证书", "ok", f"已找到 {cert_path.name}")
+    return _health_item(
+        "cert",
+        "抓包证书",
+        "warn",
+        "未在用户目录找到 mitmproxy 证书",
+        "首次使用 cv 模式需运行 install_mitmproxy_cert.ps1，否则读不到新版微信的 OpenID",
+    )
+
+
+def _check_template_health() -> Dict[str, Any]:
+    if getattr(collector, "method_name", "") != "cv":
+        return _health_item("templates", "界面模板", "skip", "当前采集方式不使用界面模板")
+    names = getattr(collector, "template_names", {}) or {}
+    directories = [
+        Path(getattr(collector, "template_override_dir", BASE_DIR / "cv_templates_local")),
+        Path(getattr(collector, "template_dir", BASE_DIR / "cv_templates")),
+    ]
+    missing = [name for name in names.values() if not any((directory / name).exists() for directory in directories)]
+    if missing:
+        return _health_item(
+            "templates",
+            "界面模板",
+            "fail",
+            f"缺少 {len(missing)} 个模板：{', '.join(missing)}",
+            "把本机截好的模板放进 cv_templates_local 后重试，见 cv_templates/README.md",
+        )
+    return _health_item("templates", "界面模板", "ok", f"{len(names)} 个模板齐全")
+
+
+def _check_wechat_health() -> Dict[str, Any]:
+    processes = _wechat_process_names()
+    if processes:
+        return _health_item("wechat", "微信进程", "ok", "正在运行：" + ", ".join(processes))
+    return _health_item(
+        "wechat",
+        "微信进程",
+        "warn",
+        "没有检测到微信进程",
+        "获取 OpenID 需要微信登录着；签到监听本身不依赖微信窗口",
+    )
+
+
+def _check_storage_health() -> Dict[str, Any]:
+    try:
+        usage = shutil.disk_usage(BASE_DIR)
+        free_gb = usage.free / (1024 ** 3)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        probe = LOG_DIR / ".health_write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        return _health_item("storage", "日志与磁盘", "fail", f"日志目录不可写：{exc}", "检查 logs 目录权限，或磁盘是否已满")
+    if usage.free < HEALTH_DISK_WARN_BYTES:
+        return _health_item("storage", "日志与磁盘", "warn", f"剩余空间仅 {free_gb:.1f} GB", "清理 logs 目录下的截图和旧日志")
+    return _health_item("storage", "日志与磁盘", "ok", f"日志可写，剩余 {free_gb:.1f} GB")
+
+
+def build_health_report() -> Dict[str, Any]:
+    """Environment checks behind /api/health (P0-02). It never starts the collector or
+    touches the WeChat window, so the page can poll it safely while signing runs."""
+    state, pipeline = openid_refresh_manager.snapshot() if openid_refresh_manager else ({}, None)
+    uptime_seconds = int((datetime.now(timezone.utc) - SERVICE_STARTED_AT).total_seconds())
+    checks: List[Dict[str, Any]] = [
+        _health_item(
+            "service",
+            "本地服务",
+            "ok",
+            f"已运行 {uptime_seconds // 3600} 小时 {uptime_seconds % 3600 // 60} 分钟",
+        ),
+        _health_item("collector", "采集方式", "ok", f"当前为 {collector_method or 'unknown'}"),
+    ]
+
+    if state.get("has_openid"):
+        source = {"file": "本机缓存", "manual": "手动输入", "cv": "自动获取", "mitmproxy": "自动获取"}.get(
+            state.get("current_source") or "", state.get("current_source") or "未知"
+        )
+        checks.append(_health_item("openid", "OpenID", "ok", f"{state.get('openid_masked')}（{source}）"))
+    else:
+        checks.append(
+            _health_item("openid", "OpenID", "fail", "还没有可用的 OpenID", "保持微信登录并点“重新获取 OpenID”")
+        )
+
+    if state.get("listening_enabled") and pipeline is not None:
+        checks.append(_health_item("listener", "签到监听", "ok", "已开启，正在接收签到事件"))
+    elif state.get("listening_enabled"):
+        checks.append(
+            _health_item("listener", "签到监听", "warn", "已开启但管道尚未就绪", "稍等几秒再检查；若持续如此，点“重新获取 OpenID”")
+        )
+    else:
+        checks.append(_health_item("listener", "签到监听", "warn", "已暂停", "点“开始监听”后才会自动签到"))
+
+    if state.get("last_error"):
+        checks.append(
+            _health_item("last_error", "最近一次错误", "warn", str(state["last_error"]), "按提示处理后点“重新获取 OpenID”")
+        )
+
+    capture_port = _capture_port()
+    checks.extend(
+        [
+            _check_proxy_health(capture_port),
+            _check_certificate_health(),
+            _check_template_health(),
+            _check_wechat_health(),
+            _check_storage_health(),
+        ]
+    )
+
+    statuses = {check["status"] for check in checks}
+    overall = "fail" if "fail" in statuses else ("warn" if "warn" in statuses else "ok")
+    return {"generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "overall": overall, "checks": checks}
+
+
+@app.route("/api/health")
+def health():
+    # Same first-request contract as the other endpoints, so a fresh process reports
+    # the cached OpenID instead of claiming there is none.
+    ensure_runtime_initialized()
+    return jsonify(build_health_report())
 
 
 @app.route("/api/openid/refresh", methods=["POST"])

@@ -767,7 +767,58 @@ async function saveSignDelay(event) {
     }
 }
 
+const HEALTH_STATUS_LABELS = {
+    ok: "正常",
+    warn: "注意",
+    fail: "异常",
+    skip: "不适用",
+};
+
+function renderHealth(report) {
+    const checks = Array.isArray(report?.checks) ? report.checks : [];
+    $("health-list").innerHTML = checks.map((check) => `
+        <div class="health-item health-item--${escapeHtml(check.status)}">
+            <span class="health-dot" aria-hidden="true"></span>
+            <div class="health-body">
+                <div class="health-head">
+                    <strong>${escapeHtml(check.label)}</strong>
+                    <span class="health-tag">${escapeHtml(HEALTH_STATUS_LABELS[check.status] || check.status)}</span>
+                </div>
+                <p class="health-detail">${escapeHtml(check.detail)}</p>
+                ${check.hint ? `<p class="health-hint">${escapeHtml(check.hint)}</p>` : ""}
+            </div>
+        </div>
+    `).join("");
+}
+
+async function runHealthCheck() {
+    const button = $("health-btn");
+    const feedback = $("health-feedback");
+    button.disabled = true;
+    button.textContent = "检查中…";
+    feedback.textContent = "";
+    feedback.className = "form-feedback";
+    try {
+        const response = await fetch("/api/health", {cache: "no-store"});
+        const report = await response.json();
+        renderHealth(report);
+        const failing = report.checks.filter((check) => check.status === "fail").length;
+        const warning = report.checks.filter((check) => check.status === "warn").length;
+        feedback.textContent = failing
+            ? `${failing} 项异常，${warning} 项需要注意`
+            : warning ? `全部通过，${warning} 项需要注意` : "全部通过";
+        feedback.className = `form-feedback ${failing ? "is-error" : "is-success"}`;
+    } catch (error) {
+        feedback.textContent = "无法连接本地服务，请确认服务是否在运行";
+        feedback.className = "form-feedback is-error";
+    } finally {
+        button.disabled = false;
+        button.textContent = "重新检查";
+    }
+}
+
 function bindEvents() {
+    $("health-btn").addEventListener("click", runHealthCheck);
     $("delay-form").addEventListener("submit", saveSignDelay);
     $("listen-toggle-btn").addEventListener("click", () => runControl("/api/listening", {enabled: !state.lastStatus?.openid_status?.listening_enabled}));
     $("openid-refresh-btn").addEventListener("click", () => runControl("/api/openid/refresh"));

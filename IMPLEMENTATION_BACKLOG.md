@@ -253,7 +253,7 @@ P3-* -> P4-01
 
 ### P0-02 环境体检页与健康检查接口
 
-- 状态：`todo`
+- 状态：`done`（2026-10-30）
 - 目标：给用户一个可视化的部署检查页
 - 主要工作：
   - 新增健康检查接口
@@ -271,6 +271,13 @@ P3-* -> P4-01
   - Web 体检页面
 - 验收标准：
   - 用户不看终端也能判断是哪一步没完成
+- 实际完成：
+  - `GET /api/health` 返回 `overall` 与 `checks[]`，每项含 `status`（`ok` / `warn` / `fail` / `skip`）、`detail`、`hint`。
+  - 检查项：服务运行时长、采集方式、`openid`（打码 + 来源）、监听管道、最近一次错误、系统代理是否残留抓包设置、`mitmproxy` 证书、`cv` 模板齐全性、微信进程（`WeChat.exe` / `Weixin.exe`）、日志目录可写与磁盘余量。
+  - 全部为只读检查，不启动采集、不操作微信窗口，页面可反复点击。
+  - 首页新增「环境体检」面板，逐项用颜色点 + 中文结论 + 下一步建议展示。
+  - 顺带统一抓包端口默认值为 `18080`：`wechat_openid_strategy.py` 原为 `8080`，与 `start_local.ps1` 及 README 不一致；体检改为直接读取采集器的 `capture_proxy_port`。
+- 验证：`test_health_checks.py` 新增 13 项（代理残留判定、PAC 地址、注册表读取失败、模板缺失/覆盖、各状态汇总），全套 89 项测试通过；实测启动后 `/api/health` 返回 `overall=ok`。
 - 依赖：`P0-01`
 - 建议提交名：
   - `feat: add deployment health checks and diagnostics page`

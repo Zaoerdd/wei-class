@@ -739,6 +739,69 @@ a {
     }
 }
 
+.health-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.health-item {
+    display: flex;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid var(--surface-border);
+    border-radius: var(--radius-md);
+    background: var(--surface-strong);
+}
+
+.health-dot {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    margin-top: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+}
+
+.health-item--ok .health-dot { background: var(--success); }
+.health-item--warn .health-dot { background: var(--warning); }
+.health-item--fail .health-dot { background: var(--danger); }
+
+.health-body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.health-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.health-tag {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.health-item--ok .health-tag { color: var(--success); }
+.health-item--warn .health-tag { color: var(--warning); }
+.health-item--fail .health-tag { color: var(--danger); }
+
+.health-detail {
+    margin: 4px 0 0;
+    font-size: 14px;
+    color: var(--text);
+    word-break: break-word;
+}
+
+.health-hint {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--muted);
+}
+
 @media (max-width: 960px) {
     .hero-card,
     .content-grid,
