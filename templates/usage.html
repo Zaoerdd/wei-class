@@ -10,10 +10,10 @@
     <div class="page-shell page-shell--narrow">
         <header class="hero-card hero-card--compact reveal">
             <div class="hero-copy">
-                <p class="eyebrow">GET STARTED</p>
-                <h1>第一次使用，看这一页就够了</h1>
+                <p class="eyebrow">使用说明</p>
+                <h1>使用说明</h1>
                 <p class="hero-description">
-                    这套工具已经补上了一键启动脚本。你不需要手敲命令，只要按顺序做下面几步即可。
+                    按顺序完成以下几步即可，无需输入命令。
                 </p>
                 <div class="hero-actions">
                     <a class="btn btn-primary" href="/">返回主页</a>
@@ -25,29 +25,29 @@
             <article class="panel">
                 <div class="panel-heading">
                     <div>
-                        <p class="panel-eyebrow">推荐流程</p>
+                        <p class="panel-eyebrow">开始使用</p>
                         <h2>三步上手</h2>
                     </div>
                 </div>
                 <ol class="guide-list">
-                    <li>双击仓库根目录里的 <code>一键启动.bat</code>。</li>
-                    <li>等待脚本自动创建环境、安装依赖，并在浏览器打开本地页面。</li>
-                    <li>保持微信登录，点击主页“开始监听”；新版微信会自动搜索微助教入口。获取期间避免切换窗口，需要停止时点“暂停监听”。暂停状态会保留。</li>
+                    <li>双击项目根目录下的 <code>一键启动.bat</code>。</li>
+                    <li>等待脚本创建运行环境、安装依赖，并自动在浏览器打开本地页面。</li>
+                    <li>保持微信登录，点击主页「开始自动签到」。识别期间程序会自动搜索微助教入口，请避免切换窗口；需要暂停时点击「暂停自动签到」。</li>
                 </ol>
             </article>
 
             <article class="panel">
                 <div class="panel-heading">
                     <div>
-                        <p class="panel-eyebrow">如果自动获取失败</p>
-                        <h2>重新获取或手动输入</h2>
+                        <p class="panel-eyebrow">识别失败时</p>
+                        <h2>重新识别或手动登录</h2>
                     </div>
                 </div>
-                <p>主页“重新获取 OpenID”会重新执行微信采集。暂停时也能获取，完成后不会自动开始监听。“刷新状态”只刷新页面。确认成功的签到会保存在主页“我的签到成功记录”，重启后仍可查看。</p>
+                <p>主页「重新识别登录」会重新执行一次微信识别；暂停状态下也可执行，完成后不会自动开始签到。「刷新状态」仅重新拉取页面数据。确认成功的签到保存在主页「签到成功记录」中，重启后仍可查看。</p>
                 <ol class="guide-list">
-                    <li>在微信里打开微助教对应页面。</li>
-                    <li>复制带有 <code>openid=</code> 的完整链接，或者只复制 32 位 OpenID。</li>
-                    <li>回到主页，在“手动兜底”区域粘贴后点击启用。</li>
+                    <li>在微信中打开微助教对应页面。</li>
+                    <li>复制含 <code>openid=</code> 的完整链接，或仅复制 32 位 OpenID。</li>
+                    <li>回到主页，在「手动登录」区域粘贴后点击「使用此链接登录」。</li>
                 </ol>
             </article>
         </section>
@@ -56,27 +56,27 @@
             <div class="panel-heading">
                 <div>
                     <p class="panel-eyebrow">注意事项</p>
-                    <h2>为了提升成功率，建议这样做</h2>
+                    <h2>建议做法</h2>
                 </div>
             </div>
             <ul class="plain-list">
-                <li>首次运行安装依赖会稍慢，属于正常现象，之后会快很多。</li>
-                <li>OpenID 有时效，长时间未使用时建议重新打开微助教页面刷新一次。</li>
-                <li>自动模式依赖微信窗口处于可识别状态，如果你改了聊天名称或按钮文案，需要同步调整环境变量。</li>
-                <li>需要结束时，双击 <code>停止服务.bat</code> 即可关闭后台服务。</li>
+                <li>首次运行安装依赖较慢属正常现象，之后会明显加快。</li>
+                <li>OpenID 存在有效期，长时间未使用建议重新打开微助教页面刷新一次。</li>
+                <li>自动识别依赖微信窗口处于可识别状态；若修改了聊天名称或按钮文案，需同步调整环境变量。</li>
+                <li>需要停止时，双击 <code>停止服务.bat</code> 关闭后台服务。</li>
             </ul>
         </section>
 
         <section class="panel reveal">
             <div class="panel-heading">
                 <div>
-                    <p class="panel-eyebrow">进阶提示</p>
-                    <h2>已有 mitmproxy / CV 抓取方案时</h2>
+                    <p class="panel-eyebrow">进阶用法</p>
+                    <h2>已有 mitmproxy 或 CV 抓取方案</h2>
                 </div>
             </div>
             <p class="usage-text">
-                仓库里保留了 mitmproxy 和 CV 抓取脚本，适合已经熟悉这套流程的人做高级调试。
-                普通用户建议优先使用默认的一键启动和页面里的手动兜底方案。
+                项目中保留了 mitmproxy 与 CV 抓取脚本，适合熟悉该流程的用户做高级调试；
+                日常使用建议采用默认启动方式，必要时用页面内的手动登录。
             </p>
         </section>
     </div>

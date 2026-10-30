@@ -601,6 +601,23 @@ a {
     box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
 }
 
+/* 延迟表单里的两个秒数框：并排显示，不跟随整行输入框拉满 */
+#delay-form .form-actions {
+    flex-wrap: nowrap;
+    align-items: center;
+    margin-top: 14px;
+}
+
+#delay-form .form-actions input {
+    width: 96px;
+    flex: 0 0 96px;
+    text-align: center;
+}
+
+#delay-form .form-actions > span {
+    color: var(--muted);
+}
+
 .form-hint,
 .form-feedback {
     margin: 0;

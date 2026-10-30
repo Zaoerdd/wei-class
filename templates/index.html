@@ -12,28 +12,28 @@
     <div class="page-shell">
         <header class="hero-card reveal">
             <div class="hero-copy">
-                <p class="eyebrow">微助教 · 只在这台电脑上运行</p>
-                <h1>开着它，签到不用盯</h1>
+                <p class="eyebrow">本机运行 · 不经过第三方服务器</p>
+                <h1>微助教自动签到</h1>
                 <p class="hero-description">
-                    会自动认出你的微助教账号。发现签到就处理，成功的记录留在本机。
+                    自动识别账号并提交签到，成功记录保存在本机。
                 </p>
                 <div class="hero-actions">
                     <button class="btn btn-primary" id="listen-toggle-btn" type="button" disabled>正在连接…</button>
                     <button class="btn btn-secondary" id="openid-refresh-btn" type="button" disabled>重新识别登录</button>
-                    <button class="btn btn-subtle" id="refresh-btn" type="button">刷新</button>
+                    <button class="btn btn-subtle" id="refresh-btn" type="button">刷新状态</button>
                     <a class="btn btn-secondary" href="/usage">新手说明</a>
                 </div>
                 <p class="form-feedback" id="control-feedback" role="status" aria-live="polite"></p>
                 <div class="quick-steps">
-                    <span>1. 微信保持登录</span>
-                    <span>2. 点上面的按钮开始</span>
-                    <span>3. 之后不用管，随时可以暂停</span>
+                    <span>1. 保持微信登录</span>
+                    <span>2. 点击「开始自动签到」</span>
+                    <span>3. 运行期间可随时暂停</span>
                 </div>
             </div>
             <aside class="hero-panel">
                 <span class="state-pill state-pill--idle" id="overall-pill">准备中</span>
                 <h2 id="overall-title">正在连接</h2>
-                <p id="overall-description">稍等几秒，连上后这里会显示当前状态。</p>
+                <p id="overall-description">正在连接本地服务，稍后显示当前状态。</p>
                 <div class="hero-metrics">
                     <div>
                         <span>最近更新</span>
@@ -48,31 +48,31 @@
         <section class="overview-grid reveal" aria-label="概览">
             <article class="overview-card">
                 <span class="overview-label">登录状态</span>
-                <strong class="overview-value" id="openid-summary">还没登录</strong>
-                <p class="overview-note" id="openid-note">自动识别你的账号，不用手动填。</p>
+                <strong class="overview-value" id="openid-summary">未登录</strong>
+                <p class="overview-note" id="openid-note">自动识别，无需手动填写。</p>
             </article>
             <article class="overview-card">
-                <span class="overview-label">我是谁</span>
-                <strong class="overview-value" id="profile-summary">还没识别</strong>
-                <p class="overview-note" id="profile-note">登录后显示姓名、班级和学号。</p>
+                <span class="overview-label">当前账号</span>
+                <strong class="overview-value" id="profile-summary">未识别</strong>
+                <p class="overview-note" id="profile-note">识别后显示姓名、班级和学号。</p>
             </article>
             <article class="overview-card">
                 <span class="overview-label">签到任务</span>
                 <strong class="overview-value" id="task-summary">暂无任务</strong>
-                <p class="overview-note" id="task-note">有任务会自动出现在这里。</p>
+                <p class="overview-note" id="task-note">检测到任务后在此显示。</p>
             </article>
             <article class="overview-card">
                 <span class="overview-label">处理结果</span>
                 <strong class="overview-value" id="result-summary">等待中</strong>
-                <p class="overview-note" id="result-note">二维码和签到结果都在这里看。</p>
+                <p class="overview-note" id="result-note">显示二维码与签到结果。</p>
             </article>
         </section>
 
         <section class="panel reveal" aria-labelledby="timeline-title">
             <div class="panel-heading">
                 <div>
-                    <p class="panel-eyebrow">进度</p>
-                    <h2 id="timeline-title">现在进行到哪一步</h2>
+                    <p class="panel-eyebrow">流程</p>
+                    <h2 id="timeline-title">运行进度</h2>
                 </div>
             </div>
             <div class="timeline" id="timeline"></div>
@@ -99,8 +99,8 @@
                 </div>
                 <div class="result-panel" id="result-panel">
                     <div class="empty-state">
-                        <strong>还没有结果</strong>
-                        <p>遇到二维码签到时，这里会直接给出可以扫的码。</p>
+                        <strong>暂无结果</strong>
+                        <p>遇到二维码签到时，此处显示可扫描的二维码。</p>
                     </div>
                 </div>
             </article>
@@ -108,19 +108,19 @@
             <article class="panel reveal" aria-labelledby="delay-title">
                 <div class="panel-heading">
                     <div>
-                        <p class="panel-eyebrow">晚一点再签</p>
-                        <h2 id="delay-title">别总是第一个</h2>
+                        <p class="panel-eyebrow">提交延迟</p>
+                        <h2 id="delay-title">随机延迟提交</h2>
                     </div>
                 </div>
                 <form class="manual-form" id="delay-form">
-                    <label for="delay-min">检测到普通签到后，随机等一会儿再提交（秒）</label>
+                    <label for="delay-min">检测到普通签到后，随机等待再提交</label>
                     <div class="form-actions">
                         <input id="delay-min" type="number" min="0" max="600" step="1" inputmode="numeric" aria-label="最短等待秒数" placeholder="最短">
                         <span>至</span>
                         <input id="delay-max" type="number" min="0" max="600" step="1" inputmode="numeric" aria-label="最长等待秒数" placeholder="最长">
                         <button class="btn btn-primary" id="delay-submit" type="submit">保存</button>
                     </div>
-                    <p class="form-hint">两个都填 0 就是不延迟。二维码签到不受影响。等太久可能错过老师提前结束的签到。</p>
+                    <p class="form-hint">单位为秒。两项均填 0 表示不延迟；二维码签到不受影响。延迟过长可能错过提前结束的签到。</p>
                     <p class="form-feedback" id="delay-feedback" role="status" aria-live="polite"></p>
                 </form>
             </article>
@@ -128,24 +128,24 @@
             <article class="panel reveal" aria-labelledby="manual-title">
                 <div class="panel-heading">
                     <div>
-                        <p class="panel-eyebrow">备用方式</p>
-                        <h2 id="manual-title">自动识别不成功时</h2>
+                        <p class="panel-eyebrow">手动登录</p>
+                        <h2 id="manual-title">自动识别失败时使用</h2>
                     </div>
                 </div>
                 <form class="manual-form" id="manual-form">
-                    <label for="openid-input">粘贴微助教链接</label>
+                    <label for="openid-input">粘贴微助教页面链接</label>
                     <input
                         id="openid-input"
                         name="openid"
                         type="text"
                         autocomplete="off"
-                        placeholder="从微信里复制微助教页面链接，粘到这里"
+                        placeholder="从微信复制的微助教页面链接"
                     >
                     <p class="form-hint">
-                        平时用不到，只在自动识别反复失败时再用。也支持直接填 32 位 OpenID。
+                        仅当自动识别持续失败时使用，也支持直接填写 32 位 OpenID。
                     </p>
                     <div class="form-actions">
-                        <button class="btn btn-primary" id="manual-submit" type="submit">用这个链接登录</button>
+                        <button class="btn btn-primary" id="manual-submit" type="submit">使用此链接登录</button>
                         <button class="btn btn-secondary hidden" id="logout-btn" type="button">退出并暂停</button>
                     </div>
                     <p class="form-feedback" id="manual-feedback" aria-live="polite"></p>
@@ -155,16 +155,16 @@
             <article class="panel reveal" aria-labelledby="health-title">
                 <div class="panel-heading">
                     <div>
-                        <p class="panel-eyebrow">出问题时</p>
-                        <h2 id="health-title">先检查一遍</h2>
+                        <p class="panel-eyebrow">故障排查</p>
+                        <h2 id="health-title">环境检查</h2>
                     </div>
                     <button class="btn btn-secondary" id="health-btn" type="button">开始检查</button>
                 </div>
-                <p class="form-hint">看一遍登录、代理、证书、模板、微信和磁盘有没有问题。只看不改，随时可以点。</p>
+                <p class="form-hint">检查登录、系统代理、证书、界面模板、微信进程与磁盘空间。只读检查，可随时重复执行。</p>
                 <div class="health-list" id="health-list">
                     <div class="empty-state">
-                        <strong>还没检查过</strong>
-                        <p>点“开始检查”，几秒就能看完。</p>
+                        <strong>尚未检查</strong>
+                        <p>点击「开始检查」，数秒内完成。</p>
                     </div>
                 </div>
                 <p class="form-feedback" id="health-feedback" role="status" aria-live="polite"></p>
@@ -178,26 +178,26 @@
         <section class="panel reveal" aria-labelledby="history-title">
             <div class="panel-heading">
                 <div>
-                    <p class="panel-eyebrow">只存在这台电脑</p>
+                    <p class="panel-eyebrow">仅保存在本机</p>
                     <h2 id="history-title">签到成功记录</h2>
                 </div>
                 <span class="panel-badge" id="history-count">0 条</span>
             </div>
-            <p class="form-hint">只记这里确认成功的签到，不会去同步平台的历史。</p>
+            <p class="form-hint">仅记录本工具确认成功的签到，不同步平台历史记录。</p>
             <div class="card-stack" id="sign-history" aria-live="polite"></div>
         </section>
 
         <section class="panel reveal" aria-labelledby="signed-title">
             <div class="panel-heading">
                 <div>
-                    <p class="panel-eyebrow">签到名单</p>
-                    <h2 id="signed-title">谁签到了</h2>
+                    <p class="panel-eyebrow">已签到</p>
+                    <h2 id="signed-title">签到名单</h2>
                 </div>
             </div>
             <div class="student-list" id="signed-students">
                 <div class="empty-state">
-                    <strong>还没有名单</strong>
-                    <p>任务能返回名单时，这里会按顺序列出来。</p>
+                    <strong>暂无数据</strong>
+                    <p>任务支持返回名单时，在此按顺序列出。</p>
                 </div>
             </div>
         </section>
