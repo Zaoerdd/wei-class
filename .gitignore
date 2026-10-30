@@ -64,3 +64,4 @@ WZJ-Sign/
 
 # Local workspace data
 .workbuddy/
+logs/*.bak-*
