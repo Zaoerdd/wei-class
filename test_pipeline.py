@@ -20,6 +20,11 @@ class PipelineReliabilityTests(unittest.TestCase):
         local.start()
         self.addCleanup(local.stop)
         self.pipeline = web.Pipeline("a" * 32, {"student_number": "test-123"})
+        # The manager is built at import time and reads this machine's saved delay;
+        # without pinning it, every sign-in test would wait for the local setting.
+        self.addCleanup(setattr, web.openid_refresh_manager, "sign_delay",
+                        web.openid_refresh_manager.sign_delay)
+        web.openid_refresh_manager.sign_delay = (0, 0)
 
     def test_listener_survives_an_iteration_error(self):
         calls = []
@@ -146,6 +151,81 @@ class PipelineReliabilityTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 web.write_json_atomic(path, {"openid": "new"})
         self.assertEqual(web.json.loads(path.read_text(encoding="utf-8")), {"openid": "old"})
+
+    def test_sign_in_waits_the_random_delay_then_submits(self):
+        manager = Mock(sign_delay=(30, 90))
+        waited = []
+        async def fake_sleep(seconds):
+            waited.append(seconds)
+        submit = Mock(return_value={"signRank": 12})
+        item = {"courseId": 1, "signId": 4, "isQR": 0, "isGPS": 1, "name": "GPS 签到"}
+        with patch.object(web, "openid_refresh_manager", manager), patch.object(web, "submit_sign", submit), \
+                patch.object(web.random, "uniform", return_value=45.0), \
+                patch.object(self.pipeline, "_sleep_unless_stopped", fake_sleep):
+            asyncio.run(self.pipeline.run_common_sign(item))
+        self.assertEqual(waited, [45.0])
+        submit.assert_called_once()
+        self.assertTrue(self.pipeline.sign_results[(1, 4)]["sign_completed"])
+
+    def test_pause_during_delay_submits_nothing(self):
+        manager = Mock(sign_delay=(30, 90))
+        async def pause_while_waiting(seconds):
+            self.pipeline.shutdown_event.set()
+        submit = Mock()
+        item = {"courseId": 1, "signId": 5, "isQR": 0, "isGPS": 0}
+        with patch.object(web, "openid_refresh_manager", manager), patch.object(web, "submit_sign", submit), \
+                patch.object(self.pipeline, "_sleep_unless_stopped", pause_while_waiting):
+            asyncio.run(self.pipeline.run_common_sign(item))
+        submit.assert_not_called()
+
+    def test_pause_during_delay_leaves_the_sign_retryable(self):
+        manager = Mock(sign_delay=(30, 90))
+        async def pause_while_waiting(seconds):
+            self.pipeline.shutdown_event.set()
+        item = {"courseId": 1, "signId": 7, "isQR": 0, "isGPS": 0}
+        with patch.object(web, "openid_refresh_manager", manager), patch.object(web, "submit_sign"), \
+                patch.object(self.pipeline, "_sleep_unless_stopped", pause_while_waiting):
+            asyncio.run(self.pipeline.run_common_sign(item))
+        # A result stored while waiting would make process_signatures skip this sign
+        # after the listener resumes.
+        self.assertNotIn((1, 7), self.pipeline.sign_results)
+
+    def test_delay_does_not_block_retry_after_a_failed_submit(self):
+        manager = Mock(sign_delay=(30, 90))
+        attempts = []
+        def failing_submit(*args, **kwargs):
+            attempts.append(1)
+            raise RuntimeError("network down")
+        async def no_sleep(seconds):
+            return None
+        item = {"courseId": 1, "signId": 6, "isQR": 0, "isGPS": 0}
+        async def scenario():
+            await self.pipeline.process_signatures([item])
+            await asyncio.gather(*self.pipeline.asyncio_tasks)
+            await self.pipeline.process_signatures([item])
+            await asyncio.gather(*self.pipeline.asyncio_tasks)
+        with patch.object(web, "openid_refresh_manager", manager), \
+                patch.object(web, "submit_sign", failing_submit), \
+                patch.object(self.pipeline, "_sleep_unless_stopped", no_sleep):
+            asyncio.run(scenario())
+        self.assertEqual(len(attempts), 2)
+
+    def test_no_delay_by_default(self):
+        manager = web.OpenIdRefreshManager(Mock(method_name="cv"), self.tmp / "cache.json")
+        self.assertEqual(manager.sign_delay, (0, 0))
+        manager.set_sign_delay(20, 60)
+        self.assertEqual(web.OpenIdRefreshManager(Mock(method_name="cv"), self.tmp / "cache.json").sign_delay, (20, 60))
+
+    def test_sign_delay_api_validates_range(self):
+        manager = web.OpenIdRefreshManager(Mock(method_name="cv"), self.tmp / "cache.json")
+        with patch.object(web, "openid_refresh_manager", manager), patch.object(web, "ensure_runtime_initialized"):
+            client = web.app.test_client()
+            for bad in ({"min": 90, "max": 30}, {"min": -1, "max": 5}, {"min": 0, "max": 601}, {"min": "x", "max": 5}):
+                self.assertEqual(client.post("/api/sign_delay", json=bad).status_code, 400)
+            self.assertEqual(manager.sign_delay, (0, 0))
+            self.assertEqual(client.post("/api/sign_delay", json={"min": 30, "max": 90}).status_code, 200)
+        self.assertEqual(manager.sign_delay, (30, 90))
+        self.assertEqual(manager.get_public_state()["sign_delay"], {"min": 30, "max": 90})
 
     def test_failed_faye_handshake_raises_clear_error_with_timeout(self):
         response = Mock(text='[{"successful": false, "error": "403::Forbidden"}]')

@@ -37,6 +37,20 @@ class LocalState:
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO settings VALUES ('listening', ?)", ("1" if enabled else "0",))
 
+    def sign_delay(self):
+        """(min, max) seconds to wait before submitting a normal/GPS sign-in; (0, 0) = no delay."""
+        with self.connect() as db:
+            rows = dict(db.execute("SELECT key, value FROM settings WHERE key IN ('sign_delay_min', 'sign_delay_max')"))
+        try:
+            return int(rows.get("sign_delay_min", 0)), int(rows.get("sign_delay_max", 0))
+        except ValueError:
+            return 0, 0
+
+    def set_sign_delay(self, minimum, maximum):
+        with self.connect() as db:
+            db.executemany("INSERT OR REPLACE INTO settings VALUES (?, ?)",
+                           [("sign_delay_min", str(int(minimum))), ("sign_delay_max", str(int(maximum)))])
+
     @staticmethod
     def account_key(openid, profile):
         student = str((profile or {}).get("student_number") or "").strip()

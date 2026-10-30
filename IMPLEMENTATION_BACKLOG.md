@@ -2,6 +2,22 @@
 
 ## 使用方式
 
+## 本次用户指定任务：SIGN-DELAY-01
+
+- 状态：`review`
+- 需求：每次都排在前几名签到，太显眼，希望加一个可设置的延迟。
+- 用户的选择：延迟时长在一个范围内随机取值；只对普通签到和 GPS 签到生效，二维码签到照旧；在网页上设置，保存后立即生效。
+- 修改：
+  - 设置保存在 `instance/attendance.sqlite3` 的 settings 表里，默认 0 秒，即不延迟。
+  - `POST /api/sign_delay` 校验 0 ≤ 最短 ≤ 最长 ≤ 600 秒。
+  - 检测到签到后，在页面上显示预计提交时间。等待期间如果暂停监听，就不再提交。
+- 修复（2026-10-30 审查）：等待中的状态一开始被写进了 `sign_results`，而 `process_signatures` 用这个字典判断“已处理”，导致两个静默漏签：
+  - 延迟期间提交失败一次（断网、5xx），本轮不再重试；
+  - 延迟中暂停监听，恢复后该签到永不提交。
+  - 现在只更新页面消息，不写 `sign_results`；失败和暂停都退回原来的“下一轮重试”行为。
+- 测试隔离：`OpenIdRefreshManager` 在 import 时读取本机真实延迟，签到测试会跟着等 10–20 秒。`PipelineReliabilityTests` 现在固定为 (0, 0)，并新增“失败后可重试”“暂停后不留下结果”两项。
+- 验证：76 项测试通过（新增 2 项回归），其中原 `test_shutdown_waits_for_in_flight_sign_in` 恢复通过。
+
 ## 本次故障修复：PAINT-01
 
 - 状态：`review`（还差在“会话转到本机显示器”的情况下实测一次）
@@ -215,7 +231,7 @@ P3-* -> P4-01
 
 ### P0-01 统一运行状态模型
 
-- 状态：`review`
+- 状态：`done`（提交 `cc032bd`）
 - 2026-10-21 完成：
   - 新增 `OpenIdRefreshManager.snapshot()`，在同一把锁内一次读出公开的 OpenID 状态和对应的监听管道。
   - 新增 `build_runtime_status()`，作为页面状态的唯一来源。`/qr_code` 和 `/api/check_session` 都改为基于它的快照，`/api/openid_status` 继续返回 `get_public_state()`。

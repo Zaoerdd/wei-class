@@ -11,6 +11,7 @@ const state = {
     lastHistoryJson: "",
     lastHistoryAt: 0,
     pollFailures: 0,
+    delayLoaded: false,
     controlBusy: false,
 };
 
@@ -585,6 +586,7 @@ function renderStatus(status) {
     renderRuntime(status);
     renderStudents(status);
     updateLogoutVisibility(status);
+    renderSignDelay(status);
     renderControls();
 }
 
@@ -734,7 +736,39 @@ async function logoutCurrentSession() {
     }
 }
 
+function renderSignDelay(status) {
+    // Fill the inputs once from the server; never overwrite what the user is typing.
+    const delay = status.openid_status?.sign_delay;
+    if (!delay || state.delayLoaded) {
+        return;
+    }
+    $("delay-min").value = delay.min;
+    $("delay-max").value = delay.max;
+    state.delayLoaded = true;
+}
+
+async function saveSignDelay(event) {
+    event.preventDefault();
+    const feedback = $("delay-feedback");
+    const minimum = Number($("delay-min").value || 0);
+    const maximum = Number($("delay-max").value || 0);
+    try {
+        const response = await fetch("/api/sign_delay", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({min: minimum, max: maximum}),
+        });
+        const payload = await response.json();
+        feedback.textContent = payload.message || (response.ok ? "已保存" : "保存失败");
+        feedback.className = `form-feedback ${response.ok && payload.success ? "is-success" : "is-error"}`;
+    } catch (error) {
+        feedback.textContent = "无法连接服务，请稍后重试";
+        feedback.className = "form-feedback is-error";
+    }
+}
+
 function bindEvents() {
+    $("delay-form").addEventListener("submit", saveSignDelay);
     $("listen-toggle-btn").addEventListener("click", () => runControl("/api/listening", {enabled: !state.lastStatus?.openid_status?.listening_enabled}));
     $("openid-refresh-btn").addEventListener("click", () => runControl("/api/openid/refresh"));
     $("refresh-btn").addEventListener("click", () => fetchStatus(true, true));

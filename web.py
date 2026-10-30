@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import queue
+import random
 import re
 import threading
 import time
@@ -866,11 +867,28 @@ class Pipeline:
             self.ws_sign_keys.discard(sign_key)
             self.ws_ended_at[sign_key] = time.monotonic()
 
+    async def _wait_sign_delay(self) -> None:
+        # A random wait, so this account is not always among the first to sign in.
+        # Only the displayed message is updated here: writing a result now would add
+        # the sign to sign_results, which process_signatures reads as "already
+        # handled" — a failed submit or a pause during the wait would then never be
+        # retried for the rest of the sign.
+        low, high = openid_refresh_manager.sign_delay if openid_refresh_manager else (0, 0)
+        delay = random.uniform(low, high) if high > 0 else 0.0
+        if delay <= 0:
+            return
+        submit_at = (datetime.now() + timedelta(seconds=delay)).strftime("%H:%M:%S")
+        self.message = f"已检测到签到，将在 {submit_at} 自动提交（随机延迟 {delay:.0f} 秒）"
+        await self._sleep_unless_stopped(delay)
+
     async def run_common_sign(self, item: Dict[str, Any]) -> None:
         sign_key = get_sign_key(item)
         try:
             if self.shutdown_event.is_set():
                 return
+            await self._wait_sign_delay()
+            if self.shutdown_event.is_set():
+                return  # paused during the delay: nothing was submitted, so retry later
             lat = safe_float(item.get("lat", item.get("latitude")), 0.0)
             lon = safe_float(item.get("lon", item.get("longitude")), 0.0)
             sign_result = await asyncio.to_thread(
@@ -1179,6 +1197,12 @@ class OpenIdRefreshManager:
         # Set only while a failed attempt left no usable OpenID (retry backoff).
         self._next_refresh_deadline: Optional[float] = None
         self.listening_enabled = local_state.listening_enabled()
+        self.sign_delay = local_state.sign_delay()
+
+    def set_sign_delay(self, minimum: int, maximum: int) -> None:
+        local_state.set_sign_delay(minimum, maximum)
+        with self._state_lock:
+            self.sign_delay = (minimum, maximum)
 
     def start(self) -> None:
         with self._state_lock:
@@ -1372,6 +1396,7 @@ class OpenIdRefreshManager:
                 "used_file_fallback": self.used_file_fallback,
                 "profile": self.current_profile,
                 "qr_auto_enabled": qr_auto_enabled,
+                "sign_delay": {"min": self.sign_delay[0], "max": self.sign_delay[1]},
                 "wechat_ui_busy": WECHAT_UI_LOCK.locked(),
             }
 
@@ -1629,6 +1654,24 @@ def set_listening():
         return jsonify(success=False, message="请选择开始或暂停监听"), 400
     openid_refresh_manager.set_listening(enabled)
     return jsonify(success=True, message="已开始监听，正在准备登录信息" if enabled else "已暂停监听；正在进行的请求可能仍会返回结果")
+
+
+SIGN_DELAY_LIMIT_SECONDS = 600
+
+
+@app.route("/api/sign_delay", methods=["POST"])
+def set_sign_delay():
+    ensure_runtime_initialized()
+    data = request.get_json(silent=True) or {}
+    try:
+        minimum, maximum = int(data.get("min")), int(data.get("max"))
+    except (TypeError, ValueError):
+        return jsonify(success=False, message="请填写整数秒数"), 400
+    if not 0 <= minimum <= maximum <= SIGN_DELAY_LIMIT_SECONDS:
+        return jsonify(success=False, message=f"需满足 0 ≤ 最短 ≤ 最长 ≤ {SIGN_DELAY_LIMIT_SECONDS} 秒"), 400
+    openid_refresh_manager.set_sign_delay(minimum, maximum)
+    message = "已关闭签到延迟" if maximum == 0 else f"已保存：普通/GPS 签到将随机延迟 {minimum}–{maximum} 秒后提交"
+    return jsonify(success=True, message=message)
 
 
 @app.route("/api/openid/refresh", methods=["POST"])

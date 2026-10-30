@@ -113,6 +113,26 @@
                 </div>
             </article>
 
+            <article class="panel reveal" aria-labelledby="delay-title">
+                <div class="panel-heading">
+                    <div>
+                        <p class="panel-eyebrow">签到延迟</p>
+                        <h2 id="delay-title">不总抢在前几名</h2>
+                    </div>
+                </div>
+                <form class="manual-form" id="delay-form">
+                    <label for="delay-min">普通 / GPS 签到在检测到后随机等待（秒）</label>
+                    <div class="form-actions">
+                        <input id="delay-min" type="number" min="0" max="600" step="1" inputmode="numeric" aria-label="最短等待秒数" placeholder="最短">
+                        <span>至</span>
+                        <input id="delay-max" type="number" min="0" max="600" step="1" inputmode="numeric" aria-label="最长等待秒数" placeholder="最长">
+                        <button class="btn btn-primary" id="delay-submit" type="submit">保存</button>
+                    </div>
+                    <p class="form-hint">两个都填 0 表示不延迟。二维码签到不受影响。延迟太长，老师提前结束签到时可能会错过。</p>
+                    <p class="form-feedback" id="delay-feedback" role="status" aria-live="polite"></p>
+                </form>
+            </article>
+
             <article class="panel reveal" aria-labelledby="manual-title">
                 <div class="panel-heading">
                     <div>
